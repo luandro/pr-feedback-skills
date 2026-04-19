@@ -33,31 +33,28 @@ The fetcher runs `gh auth status` internally — don't wrap it in another auth c
 
 | User gave you | Command |
 |---|---|
-| Nothing (current branch) | `python3 scripts/fetch_unresolved_pr_feedback.py` |
-| `owner/repo` + PR number | `python3 scripts/fetch_unresolved_pr_feedback.py --repo owner/repo --pr 179` |
-| PR URL or review URL | `python3 scripts/fetch_unresolved_pr_feedback.py --url <url>` |
+| Nothing (current branch) | `python3 scripts/fetch_unresolved_pr_feedback.py --format text` |
+| `owner/repo` + PR number | `python3 scripts/fetch_unresolved_pr_feedback.py --repo owner/repo --pr 179 --format text` |
+| PR URL or review URL | `python3 scripts/fetch_unresolved_pr_feedback.py --url <url> --format text` |
 
 Optional flags (compose with any form above):
 
 | Flag | Effect | When to use |
 |---|---|---|
 | `--filter-path <path>` | Only threads touching that file | Large PR, agent is focused on one file |
-| `--include-all` | Include PR author + bot comments | User explicitly asked for everything |
-| `--output feedback.json` | Write JSON to file | Piping into `build_actions.py`, or saving tokens |
-| `--minimal` | Drop verbose fields (timestamps, URLs, long bodies truncated to 200 chars) | Big PRs, token-constrained context windows |
+| `--threads-only` | Return only unresolved review threads; skip outstanding reviews and conversation comments (also skips the REST + reviews API calls) | Fastest path when you only care about inline thread feedback |
+| `--exclude-bots` | Filter out bot + PR-author comments | Human-only signal; bot threads show `excluded_from_attention: true` by default but are still returned |
+| `--format text` (or `-f text`) | Render as plain text with full bodies, numbered, ids inline — no jq needed | Default for agent consumption; use `--format json` when piping into `build_actions.py`. Note: `-f` in `build_actions.py` means `--file`, not `--format` — use the long form when composing pipelines |
+| `--output feedback.json` | Write output to file instead of stdout | Piping into `build_actions.py`, or saving tokens |
+| `--minimal` | Drop comment bodies and truncate to 200 chars (JSON only) | Big PRs, token-constrained context windows |
+
+**Bot comment behaviour**: bot-authored review threads (capy-ai, greptile-apps, chatgpt-codex-connector, etc.) are included by default because they are common and actionable. Their per-comment `excluded_from_attention` field is `true`, so the resolver pipeline and human agents can distinguish them from human reviewers. Pass `--exclude-bots` only when you want to suppress them entirely.
 
 **Token-size tip**: on PRs with many comments, combine `--output feedback.json` + `--minimal`. A 50-thread PR typically shrinks ~40–70% with `--minimal` while keeping everything `build_actions.py` and the resolver need.
 
 ### Step 2 — Report to the user
 
-Read the JSON and summarize. Default summary format:
-
-```
-PR #179 (owner/repo) — N unresolved thread(s), M outstanding review(s), K conversation comment(s)
-1. [src/main.rs:42] @reviewer: <first line of body>…  (thread_id: PRRT_xxx)
-2. [src/lib.rs:10]  @reviewer: <first line of body>…  (thread_id: PRRT_yyy)
-...
-```
+With `--format text` the output is already agent-readable — full bodies, numbered, `thread_id` and `comment_id` inline. Read it directly and relay the summary. No JSON parsing or jq needed.
 
 Then stop. This skill is read-only — do **not** apply fixes or replies here.
 
@@ -86,7 +83,7 @@ If the user wants to resolve or react, either:
 - `outstanding_reviews[]` — top-level review bodies in `CHANGES_REQUESTED` / `COMMENTED` state. **Report-only** — quote the `body` for manual follow-up.
 - `conversation_comments[]` — top-level PR issue comments (no native resolved state).
 
-Rules: default excludes bot + PR-author comments (pass `--include-all` only when asked); stop after reporting — never mutate from this skill.
+Rules: default includes all comments including bots (pass `--exclude-bots` to suppress them); stop after reporting — never mutate from this skill.
 
 ## `build_actions.py`
 
@@ -118,7 +115,7 @@ Field mapping (for hand-built actions): `thread_id` → resolver `thread_id` (ki
 | `GraphQL response missing field at path repository.pullRequest…` | PR doesn't exist, was moved, or the token lacks access. |
 | No PR for the current branch | Ask for a PR URL or `--repo` + `--pr`. |
 | `Could not parse PR URL` | Confirm the URL is `https://github.com/owner/repo/pull/<n>`. |
-| All counts zero in `summary` | Report "no unresolved feedback" and stop. Don't silently re-run with `--include-all`. |
+| All counts zero in `summary` | Report "no unresolved feedback" and stop. |
 | `--filter-path` returns no threads | Report the path is clean; confirm spelling. |
 | GraphQL / REST errors bubble as `RuntimeError` | Surface verbatim; never silently retry. |
 | `build_actions.py` emits `"repo": null` | Fetcher input malformed / truncated. Re-fetch. |

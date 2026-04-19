@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -113,13 +114,20 @@ class PullRequestRef:
     number: int
 
 
+# ANSI escape sequence pattern (covers color codes, cursor movement, etc.)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
 def run(cmd: list[str], stdin: str | None = None) -> str:
-    proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True)
+    # Disable color output from gh and other CLI tools so JSON parsing works.
+    env = {**os.environ, "NO_COLOR": "1", "GH_CONFIG_PREFS_NO_COLOR": "true"}
+    proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env)
     if proc.returncode != 0:
         raise RuntimeError(
             f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr.strip()}"
         )
-    return proc.stdout
+    # Strip any ANSI escape codes that leaked through (belt-and-suspenders)
+    return _ANSI_RE.sub("", proc.stdout)
 
 
 def run_json(cmd: list[str], stdin: str | None = None) -> Any:
@@ -332,14 +340,19 @@ def fetch_issue_comments(pr_ref: PullRequestRef) -> list[dict[str, Any]]:
 # Filtering & building
 # ---------------------------------------------------------------------------
 
-def keep_actor(login: str | None, pr_author: str | None, include_all: bool) -> bool:
+def keep_actor(
+    login: str | None,
+    pr_author: str | None,
+    include_all: bool,
+    author: dict[str, Any] | None = None,
+) -> bool:
     if include_all:
         return True
     if not login:
         return False
     if pr_author and login == pr_author:
         return False
-    if is_bot_login(login):
+    if is_bot_login(login) or is_bot_author(author):
         return False
     return True
 
@@ -359,15 +372,10 @@ def build_unresolved_threads(
             continue
 
         comments: list[dict[str, Any]] = []
-        needs_attention = False
         for comment in (thread.get("comments") or {}).get("nodes") or []:
-            login = (comment.get("author") or {}).get("login")
-            if not include_all and (is_bot_author(comment.get("author")) or is_bot_login(login)):
-                actor_kept = False
-            else:
-                actor_kept = keep_actor(login, pr_author, include_all)
-            if actor_kept:
-                needs_attention = True
+            author_obj = comment.get("author")
+            login = (author_obj or {}).get("login")
+            actor_kept = keep_actor(login, pr_author, include_all, author_obj)
             comments.append({
                 "id": comment["id"],
                 "database_id": comment.get("databaseId"),
@@ -378,9 +386,6 @@ def build_unresolved_threads(
                 "updated_at": comment.get("updatedAt"),
                 "excluded_from_attention": not actor_kept,
             })
-
-        if not include_all and not needs_attention:
-            continue
 
         results.append({
             "thread_id": thread["id"],
@@ -416,10 +421,9 @@ def build_outstanding_reviews(
 
     results: list[dict[str, Any]] = []
     for review in sorted_reviews:
-        login = (review.get("author") or {}).get("login")
-        if not include_all and is_bot_author(review.get("author")):
-            continue
-        if not keep_actor(login, pr_author, include_all):
+        author_obj = review.get("author")
+        login = (author_obj or {}).get("login")
+        if not keep_actor(login, pr_author, include_all, author_obj):
             continue
         latest_state = latest_state_by_user.get(login or "", "")
         if latest_state in {"APPROVED", "DISMISSED"}:
@@ -435,6 +439,7 @@ def build_outstanding_reviews(
             "state": state,
             "submitted_at": review.get("submittedAt"),
             "body": body,
+            "excluded_from_attention": not keep_actor(login, pr_author, False, author_obj),
         })
     return results
 
@@ -533,6 +538,90 @@ def _apply_minimal(result: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Text rendering (agent-friendly, no jq needed)
+# ---------------------------------------------------------------------------
+
+def _at(login: str | None) -> str:
+    return f"@{login}" if login else "@(unknown)"
+
+
+def _format_text(result: dict[str, Any]) -> str:
+    """Render feedback as plain text — full bodies, no JSON parsing required."""
+    lines: list[str] = []
+    pr = result.get("pull_request", {})
+    s = result.get("summary", {})
+
+    lines.append(f"PR #{pr.get('number')} — {pr.get('title') or '(no title)'}")
+    lines.append(
+        f"Repo: {pr.get('owner')}/{pr.get('repo')}  "
+        f"State: {pr.get('state')}  "
+        f"Author: {_at(pr.get('author'))}"
+    )
+    lines.append(f"URL: {pr.get('url')}")
+    lines.append("")
+    lines.append(
+        f"Summary: {s.get('unresolved_review_thread_count', 0)} unresolved thread(s)  "
+        f"{s.get('outstanding_review_count', 0)} outstanding review(s)  "
+        f"{s.get('conversation_comment_count', 0)} conversation comment(s)"
+    )
+
+    threads = result.get("unresolved_review_threads") or []
+    if threads:
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("UNRESOLVED REVIEW THREADS")
+        lines.append("=" * 60)
+        for i, t in enumerate(threads, 1):
+            loc = t.get("path") or "(unknown path)"
+            line_no = t.get("line") or t.get("original_line")
+            if line_no:
+                loc = f"{loc}:{line_no}"
+            outdated = "  [OUTDATED]" if t.get("is_outdated") else ""
+            lines.append(f"\n[{i}] {loc}{outdated}")
+            lines.append(f"    thread_id: {t['thread_id']}")
+            if t.get("root_comment_id"):
+                lines.append(f"    comment_id: {t['root_comment_id']}")
+            for c in t.get("comments") or []:
+                bot_flag = "  [bot]" if c.get("excluded_from_attention") else ""
+                lines.append(f"    {_at(c.get('author'))}{bot_flag}:")
+                body = (c.get("body") or "").strip()
+                for body_line in body.splitlines():
+                    lines.append(f"      {body_line}")
+
+    reviews = result.get("outstanding_reviews") or []
+    if reviews:
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("OUTSTANDING REVIEWS")
+        lines.append("=" * 60)
+        for i, r in enumerate(reviews, 1):
+            bot_flag = "  [bot]" if r.get("excluded_from_attention") else ""
+            lines.append(f"\n[{i}] {_at(r.get('author'))}{bot_flag}  state: {r.get('state')}")
+            lines.append(f"    id: {r['id']}")
+            body = (r.get("body") or "").strip()
+            for body_line in body.splitlines():
+                lines.append(f"    {body_line}")
+
+    comments = result.get("conversation_comments") or []
+    if comments:
+        lines.append("")
+        lines.append("=" * 60)
+        lines.append("CONVERSATION COMMENTS")
+        lines.append("=" * 60)
+        for i, c in enumerate(comments, 1):
+            lines.append(f"\n[{i}] {_at(c.get('author'))}  id: {c['id']}")
+            body = (c.get("body") or "").strip()
+            for body_line in body.splitlines():
+                lines.append(f"    {body_line}")
+
+    if not threads and not reviews and not comments:
+        lines.append("")
+        lines.append("No unresolved feedback found.")
+
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -547,13 +636,24 @@ def main() -> None:
         help="GitHub pull request URL or review URL (the pull request is extracted from it)",
     )
     parser.add_argument(
+        "--exclude-bots",
+        action="store_true",
+        help="filter out bot and PR-author comments (default is to include all — bot review threads are common and actionable)",
+    )
+    parser.add_argument(
         "--include-all",
         action="store_true",
-        help="include PR author comments and bot comments",
+        default=False,
+        help=argparse.SUPPRESS,  # kept for backwards compat; include-all is now the default
     )
     parser.add_argument(
         "--filter-path",
         help="only return review threads for this file path",
+    )
+    parser.add_argument(
+        "--threads-only",
+        action="store_true",
+        help="return only unresolved review threads; skip outstanding reviews and conversation comments",
     )
     parser.add_argument(
         "--output", "-o",
@@ -564,6 +664,12 @@ def main() -> None:
         action="store_true",
         help="drop comment bodies and verbose per-comment fields to save tokens; retains ids/paths/authors",
     )
+    parser.add_argument(
+        "--format", "-f",
+        choices=["json", "text"],
+        default="json",
+        help="output format: json (default) or text (human/agent-readable, full bodies, no jq needed)",
+    )
     args = parser.parse_args()
 
     ensure_gh_auth()
@@ -573,19 +679,20 @@ def main() -> None:
     # query already carries PR metadata). This avoids a separate `gh pr view`
     # call that can return empty output when a gh extension misbehaves.
     pr_meta, review_threads = fetch_pr_meta_and_threads(pr_ref)
-    reviews = fetch_reviews(pr_ref)
-    issue_comments = fetch_issue_comments(pr_ref)
+    reviews = fetch_reviews(pr_ref) if not args.threads_only else []
+    issue_comments = fetch_issue_comments(pr_ref) if not args.threads_only else []
 
     pr_author = pr_meta.get("author")
+    include_all = not args.exclude_bots
     unresolved_threads = build_unresolved_threads(
-        review_threads, pr_author, args.include_all, args.filter_path
+        review_threads, pr_author, include_all, args.filter_path
     )
     outstanding_reviews = build_outstanding_reviews(
-        reviews, pr_author, args.include_all
-    )
+        reviews, pr_author, include_all
+    ) if not args.threads_only else []
     conversation_comments = build_conversation_comments(
-        issue_comments, pr_author, args.include_all
-    )
+        issue_comments, pr_author, include_all
+    ) if not args.threads_only else []
 
     result = {
         "pull_request": {
@@ -618,10 +725,14 @@ def main() -> None:
         },
     }
 
-    if args.minimal:
-        result = _apply_minimal(result)
-
-    output_str = json.dumps(result, indent=2) + "\n"
+    if args.format == "text":
+        if args.minimal:
+            print("Warning: --minimal is ignored when --format text is used", file=sys.stderr)
+        output_str = _format_text(result)
+    else:
+        if args.minimal:
+            result = _apply_minimal(result)
+        output_str = json.dumps(result, indent=2) + "\n"
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
