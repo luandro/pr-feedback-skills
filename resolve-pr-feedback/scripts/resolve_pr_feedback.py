@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -52,6 +53,9 @@ mutation($threadId: ID!) {
 }
 """
 
+# ANSI escape sequence pattern (covers color codes, cursor movement, etc.)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
 
 @dataclass
 class PullRequestRef:
@@ -67,22 +71,33 @@ class PullRequestRef:
 def run(cmd: list[str], stdin: str | None = None, dry_run: bool = False) -> str:
     if dry_run:
         return json.dumps({"dry_run": True, "command": cmd})
-    proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True)
+    env = {**os.environ, "NO_COLOR": "1", "GH_CONFIG_PREFS_NO_COLOR": "true"}
+    proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env)
     if proc.returncode != 0:
+        stderr = _ANSI_RE.sub("", proc.stderr.strip())
         raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr.strip()}"
+            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{stderr}"
         )
-    return proc.stdout
+    return _ANSI_RE.sub("", proc.stdout)
 
 
 def run_json(cmd: list[str], stdin: str | None = None, dry_run: bool = False) -> Any:
     out = run(cmd, stdin=stdin, dry_run=dry_run)
     if dry_run:
         return {"dry_run": True, "command": cmd, "stdin": stdin}
+    if not out or not out.strip():
+        raise RuntimeError(
+            f"Empty output from {' '.join(cmd)}; expected JSON. "
+            f"This usually means `gh` returned nothing or a wrapper altered the output."
+        )
     try:
         return json.loads(out)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Failed to parse JSON from {' '.join(cmd)}") from exc
+        preview = out[:200].replace("\n", " ")
+        raise RuntimeError(
+            f"Failed to parse JSON from {' '.join(cmd)}\n"
+            f"First 200 chars of output: {preview!r}"
+        ) from exc
 
 
 def ensure_gh_auth(dry_run: bool) -> None:
@@ -135,6 +150,20 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
         owner, repo = parse_repo_name(repo_value)
         return PullRequestRef(owner=owner, repo=repo, number=pr_value)
 
+    if pr_value is None:
+        pr_payload = run_json(
+            ["gh", "pr", "view", "--json", "number,url"],
+            dry_run=dry_run,
+        )
+        if dry_run:
+            return PullRequestRef(owner="OWNER", repo="REPO", number=1)
+        if not pr_payload or "url" not in pr_payload:
+            raise RuntimeError(
+                "Could not determine the PR for the current branch. "
+                "Pass --repo + --pr or --url explicitly."
+            )
+        return parse_pr_url(pr_payload["url"])
+
     repo_name = run(
         ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
         dry_run=dry_run,
@@ -150,17 +179,28 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
 # ---------------------------------------------------------------------------
 
 def root_comment_id_for_thread(thread_id: str, dry_run: bool) -> int | None:
-    payload = run_json(
-        ["gh", "api", "graphql", "-F", "query=@-", "-F", f"threadId={thread_id}"],
-        stdin=GET_THREAD_QUERY,
-        dry_run=dry_run,
-    )
+    try:
+        payload = run_json(
+            ["gh", "api", "graphql", "-F", "query=@-", "-F", f"threadId={thread_id}"],
+            stdin=GET_THREAD_QUERY,
+            dry_run=dry_run,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Failed to load review thread '{thread_id}' to determine its root comment id. "
+            "Check that the thread id is current, belongs to the target repository, and that "
+            "`gh api graphql` is returning JSON (not an auth or formatting error). "
+            "If you already have a root comment id, pass `--comment-id` to skip this lookup."
+        ) from exc
     if dry_run:
         return None
 
     node = payload.get("data", {}).get("node")
     if not node or node.get("__typename") != "PullRequestReviewThread":
-        raise RuntimeError(f"Could not load review thread '{thread_id}'")
+        raise RuntimeError(
+            f"GitHub did not return a PullRequestReviewThread for '{thread_id}'. "
+            "The thread may be stale, already resolved, or from another repository."
+        )
 
     comments = (node.get("comments") or {}).get("nodes") or []
     for comment in comments:
