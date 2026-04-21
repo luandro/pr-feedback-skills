@@ -143,7 +143,8 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
     if args.url:
         return parse_pr_url(args.url)
 
-    pr_meta = item.get("pull_request") or {}
+    raw_pr_meta = item.get("pull_request")
+    pr_meta = raw_pr_meta if isinstance(raw_pr_meta, dict) else {}
 
     repo_value = args.repo
     if repo_value is None and pr_meta.get("owner") and pr_meta.get("repo"):
@@ -166,12 +167,13 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
         )
         if dry_run:
             return PullRequestRef(owner="OWNER", repo="REPO", number=1)
-        if not pr_payload or "url" not in pr_payload:
+        pr_url = pr_payload.get("url") if isinstance(pr_payload, dict) else None
+        if not isinstance(pr_url, str) or not pr_url:
             raise RuntimeError(
                 "Could not determine the PR for the current branch. "
                 "Pass --repo + --pr or --url explicitly."
             )
-        return parse_pr_url(pr_payload["url"])
+        return parse_pr_url(pr_url)
 
     repo_name = run(
         ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
