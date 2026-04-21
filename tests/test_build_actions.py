@@ -3,6 +3,15 @@ from __future__ import annotations
 import build_actions
 
 
+def test_pr_meta_extracts_repo_and_pr_and_treats_partial_repo_as_missing() -> None:
+    assert build_actions._pr_meta(
+        {"pull_request": {"owner": "octo", "repo": "repo", "number": 17}}
+    ) == {"repo": "octo/repo", "pr": 17}
+    assert build_actions._pr_meta(
+        {"pull_request": {"owner": "octo", "repo": None, "number": 17}}
+    ) == {"repo": None, "pr": 17}
+
+
 def test_pr_meta_missing_pull_request_returns_nulls() -> None:
     assert build_actions._pr_meta({}) == {"repo": None, "pr": None}
     assert build_actions._pr_meta({"pull_request": None}) == {"repo": None, "pr": None}

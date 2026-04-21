@@ -135,16 +135,17 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
     if args.url:
         return parse_pr_url(args.url)
 
-    if item.get("pull_request"):
-        pr_meta = item["pull_request"]
-        return PullRequestRef(
-            owner=pr_meta["owner"],
-            repo=pr_meta["repo"],
-            number=pr_meta.get("number"),
-        )
+    pr_meta = item.get("pull_request") or {}
 
-    repo_value = args.repo or item.get("repo")
-    pr_value = args.pr if args.pr is not None else item.get("pr")
+    repo_value = args.repo
+    if repo_value is None and pr_meta.get("owner") and pr_meta.get("repo"):
+        repo_value = f"{pr_meta['owner']}/{pr_meta['repo']}"
+    if repo_value is None:
+        repo_value = item.get("repo")
+
+    pr_value = args.pr if args.pr is not None else pr_meta.get("number")
+    if pr_value is None:
+        pr_value = item.get("pr")
 
     if repo_value:
         owner, repo = parse_repo_name(repo_value)
@@ -332,7 +333,9 @@ def execute_action(
                     dry_run=dry_run,
                 )
             resolve_payload = resolve_review_thread(thread_id, dry_run)
-            result["action_taken"] = "replied_and_resolved" if summary else "resolved"
+            result["action_taken"] = (
+                "replied_and_resolved" if reply_payload is not None else "resolved"
+            )
             result["details"] = {
                 "reply": reply_payload,
                 "resolve_thread": resolve_payload,

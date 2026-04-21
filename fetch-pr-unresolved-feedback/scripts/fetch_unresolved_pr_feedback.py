@@ -277,7 +277,13 @@ def _paginate(
                 f"{pr_ref.owner}/{pr_ref.repo}#{pr_ref.number}."
             )
 
-        page_info = node.get("pageInfo", {})
+        page_info = node.get("pageInfo")
+        if not isinstance(page_info, dict):
+            raise RuntimeError(
+                f"GraphQL response missing field at path {'.'.join(path_parts)}.pageInfo; "
+                f"check that the PR exists and you have access to "
+                f"{pr_ref.owner}/{pr_ref.repo}#{pr_ref.number}."
+            )
         items.extend(node.get("nodes") or [])
 
         if page_info.get("hasNextPage"):
@@ -415,6 +421,9 @@ def build_unresolved_threads(
                 "updated_at": comment.get("updatedAt"),
                 "excluded_from_attention": not actor_kept,
             })
+
+        if not include_all and not comments:
+            continue
 
         if not include_all and comments and all(
             _is_suppressible_excluded_comment(
