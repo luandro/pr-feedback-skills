@@ -241,13 +241,13 @@ def test_fetch_reviews_and_fetch_issue_comments_use_expected_backends(
 
     monkeypatch.setattr(fetcher, "_paginate", fake_paginate)
     assert fetcher.fetch_review_threads(_pr_ref()) == [{"id": "R1"}]
-    args, kwargs = review_calls[0]
+    args, _kwargs = review_calls[0]
     assert args[1] == _pr_ref()
     assert args[2] == "threadsCursor"
     assert args[3] == ["repository", "pullRequest", "reviewThreads"]
 
     assert fetcher.fetch_reviews(_pr_ref()) == [{"id": "R1"}]
-    args, kwargs = review_calls[1]
+    args, _kwargs = review_calls[1]
     assert args[1] == _pr_ref()
     assert args[2] == "reviewsCursor"
     assert args[3] == ["repository", "pullRequest", "reviews"]

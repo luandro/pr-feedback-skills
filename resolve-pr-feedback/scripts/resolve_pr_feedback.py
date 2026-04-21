@@ -68,11 +68,19 @@ class PullRequestRef:
         return f"{self.owner}/{self.repo}"
 
 
-def run(cmd: list[str], stdin: str | None = None, dry_run: bool = False) -> str:
+COMMAND_TIMEOUT_SECONDS = 60
+
+
+def run(cmd: list[str], stdin: str | None = None, dry_run: bool = False, timeout: int = COMMAND_TIMEOUT_SECONDS) -> str:
     if dry_run:
         return json.dumps({"dry_run": True, "command": cmd})
     env = {**os.environ, "NO_COLOR": "1", "GH_CONFIG_PREFS_NO_COLOR": "true"}
-    proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env)
+    try:
+        proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Command timed out after {timeout}s: {' '.join(cmd)}"
+        ) from exc
     if proc.returncode != 0:
         stderr = _ANSI_RE.sub("", proc.stderr.strip())
         raise RuntimeError(
@@ -196,8 +204,9 @@ def root_comment_id_for_thread(thread_id: str, dry_run: bool) -> int | None:
     if dry_run:
         return None
 
-    node = payload.get("data", {}).get("node")
-    if not node or node.get("__typename") != "PullRequestReviewThread":
+    data = payload.get("data") if isinstance(payload, dict) else None
+    node = data.get("node") if isinstance(data, dict) else None
+    if not isinstance(node, dict) or node.get("__typename") != "PullRequestReviewThread":
         raise RuntimeError(
             f"GitHub did not return a PullRequestReviewThread for '{thread_id}'. "
             "The thread may be stale, already resolved, or from another repository."

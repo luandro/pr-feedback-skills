@@ -19,13 +19,13 @@ The suite must validate current behavior, not an imagined refactor target. Where
   - `pytest.ini`
   - `tests/`
   - real GitHub-shaped fixture files for fetch-layer parsing
-- The fetcher and resolver both wrap `gh` CLI calls through `subprocess`, but they do not share an implementation. They must be tested independently.
+- The fetcher and resolver both wrap `gh` CLI calls through `subprocess`, but they do not share an implementation. They must be tested independently. The resolver's `run()` now has a configurable timeout (default 60 s via `COMMAND_TIMEOUT_SECONDS`).
 - `apply_pr_feedback_actions.py` imports `resolve_pr_feedback.py` via a local `sys.path.insert`, so test imports must match that layout.
 - The fetcher has a live text-rendering path (`--format text`) via `_at()` and `_format_text()`.
 - The fetcher default is effectively “include everything except when `--exclude-bots` is passed”. The hidden `--include-all` flag exists only for backwards compatibility.
-- `build_unresolved_threads()` now drops bot-only, PR-author-only, and empty unresolved threads when `--exclude-bots` is active, but preserves unknown-author threads and annotates comments with `excluded_from_attention`.
+- `build_unresolved_threads()` now drops bot-only, PR-author-only, and empty unresolved threads when `--exclude-bots` is active, but preserves unknown-author threads and annotates comments with `excluded_from_attention`. Its `zip()` calls use `strict=True` to enforce the length invariant.
 - `build_actions.py` defaults generated actions to `decision="addressed"` and an empty summary. `validate_actions()` intentionally warns on addressed review-thread actions without a summary.
-- `resolve_pr_feedback.py` now has NO_COLOR environment overrides, ANSI stripping, richer empty-output diagnostics, safer current-branch PR fallback handling, and main-path coverage for CLI override behavior.
+- `resolve_pr_feedback.py` now has NO_COLOR environment overrides, ANSI stripping, richer empty-output diagnostics, safer current-branch PR fallback handling, configurable subprocess timeout with `TimeoutExpired` handling, and safer GraphQL payload guards in `root_comment_id_for_thread`.
 - `_GRAPHQL_PR_CORE` in the fetcher is dead code. It is out of scope for test coverage and should be removed in a separate cleanup change.
 
 ## Test Design Principles

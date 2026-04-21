@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 
+import pytest
+
 import fetch_unresolved_pr_feedback as fetcher
 
 
@@ -47,9 +49,5 @@ def test_fetcher_resolve_pr_ref_raises_when_current_branch_pr_cannot_be_determin
     monkeypatch.setattr(fetcher, "run_json", lambda *args, **kwargs: {})
 
     args = argparse.Namespace(url=None, repo=None, pr=None)
-    try:
+    with pytest.raises(RuntimeError, match="Could not determine the PR for the current branch"):
         fetcher.resolve_pr_ref(args)
-    except RuntimeError as exc:
-        assert "Could not determine the PR for the current branch" in str(exc)
-    else:
-        raise AssertionError("Expected RuntimeError")

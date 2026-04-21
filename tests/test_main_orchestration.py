@@ -107,20 +107,20 @@ def test_build_actions_main_validates_malformed_feedback_and_exits_nonzero(
         build_actions.main()
 
     assert excinfo.value.code == 1
-    assert output_path.read_text(encoding="utf-8") == (
-        '[\n'
-        '  {\n'
-        '    "repo": null,\n'
-        '    "pr": null,\n'
-        '    "kind": "review_thread",\n'
-        '    "thread_id": "T1",\n'
-        '    "decision": "addressed",\n'
-        '    "comment_id": 42,\n'
-        '    "summary": "Fixed in abc1234",\n'
-        '    "_context": "src/main.py:17"\n'
-        '  }\n'
-        ']\n'
-    )
+    output = output_path.read_text(encoding="utf-8")
+    assert json.loads(output) == [
+        {
+            "repo": None,
+            "pr": None,
+            "kind": "review_thread",
+            "thread_id": "T1",
+            "decision": "addressed",
+            "comment_id": 42,
+            "summary": "Fixed in abc1234",
+            "_context": "src/main.py:17",
+        }
+    ]
+    assert output.endswith("\n")
 
     captured = capsys.readouterr()
     assert "#1: no repo/url/pull_request — resolver will reject" in captured.err

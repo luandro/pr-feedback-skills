@@ -25,11 +25,12 @@ def test_run_dry_run_returns_encoded_command() -> None:
 
 
 def test_run_sets_no_color_and_strips_ansi(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_subprocess_run(cmd, input=None, text=None, capture_output=None, env=None):
+    def fake_subprocess_run(cmd, **kwargs):
         assert cmd == ["gh", "api", "graphql"]
-        assert input == "query"
-        assert text is True
-        assert capture_output is True
+        assert kwargs.get("input") == "query"
+        assert kwargs.get("text") is True
+        assert kwargs.get("capture_output") is True
+        env = kwargs.get("env")
         assert env is not None
         assert env["NO_COLOR"] == "1"
         assert env["GH_CONFIG_PREFS_NO_COLOR"] == "true"
@@ -41,7 +42,7 @@ def test_run_sets_no_color_and_strips_ansi(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_run_raises_on_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_subprocess_run(cmd, input=None, text=None, capture_output=None, env=None):
+    def fake_subprocess_run(cmd, **kwargs):
         return make_completed_process(
             stderr="\x1b[31mauth failed\x1b[0m",
             returncode=1,

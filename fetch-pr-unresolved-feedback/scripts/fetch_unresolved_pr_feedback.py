@@ -260,7 +260,7 @@ def _paginate(
                         meta_capture[key] = pr_node[key]
             first_pass = False
 
-        node = payload["data"]
+        node = payload.get("data")
         for part in path_parts:
             if node is None:
                 raise RuntimeError(
@@ -431,7 +431,7 @@ def build_unresolved_threads(
                 pr_author,
                 raw_comment.get("author"),
             )
-            for comment, raw_comment in zip(comments, raw_comments)
+            for comment, raw_comment in zip(comments, raw_comments, strict=True)
         ):
             continue
 
