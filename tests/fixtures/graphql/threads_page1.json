@@ -1,0 +1,104 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 39,
+        "url": "https://github.com/coolabnet/community-box/pull/39",
+        "title": "fix: Phase 1 critical bug fixes and safety nets",
+        "state": "OPEN",
+        "author": {
+          "__typename": "User",
+          "login": "luandro"
+        },
+        "reviewThreads": {
+          "pageInfo": {
+            "hasNextPage": true,
+            "endCursor": "CURSOR_1"
+          },
+          "nodes": [
+            {
+              "id": "PRRT_kwDOOemAKc58EO_X",
+              "isResolved": true,
+              "isOutdated": false,
+              "path": "app/src/components/ErrorBoundary.tsx",
+              "line": 32,
+              "originalLine": 28,
+              "startLine": 32,
+              "originalStartLine": null,
+              "diffSide": "RIGHT",
+              "startDiffSide": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_kwDOOemAKc65PfgX",
+                    "databaseId": 3107846167,
+                    "url": "https://github.com/coolabnet/community-box/pull/39#discussion_r3107846167",
+                    "body": "**[Medium] [Bug]** This retry logic only clears the boundary state and re-renders the same child tree.",
+                    "createdAt": "2026-04-20T01:24:58Z",
+                    "updatedAt": "2026-04-20T01:24:58Z",
+                    "author": {
+                      "__typename": "Bot",
+                      "login": "capy-ai"
+                    }
+                  },
+                  {
+                    "id": "PRRC_kwDOOemAKc65PwBw",
+                    "databaseId": 3107913840,
+                    "url": "https://github.com/coolabnet/community-box/pull/39#discussion_r3107913840",
+                    "body": "Fixed in 9162a4f: Added onReset callback prop to ErrorBoundary.",
+                    "createdAt": "2026-04-20T02:00:09Z",
+                    "updatedAt": "2026-04-20T02:00:09Z",
+                    "author": {
+                      "__typename": "User",
+                      "login": "luandro"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOOemAKc58EO_Z",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "app/plans/2026-04-19-2026-04-18-low-hanging-fruit-improvements-4.0.md",
+              "line": null,
+              "originalLine": 14,
+              "startLine": null,
+              "originalStartLine": null,
+              "diffSide": "RIGHT",
+              "startDiffSide": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_kwDOOemAKc65PfgZ",
+                    "databaseId": 3107846169,
+                    "url": "https://github.com/coolabnet/community-box/pull/39#discussion_r3107846169",
+                    "body": "**[Medium] [Bug]** This plan item misstates current language-score behavior.",
+                    "createdAt": "2026-04-20T01:24:58Z",
+                    "updatedAt": "2026-04-20T01:24:58Z",
+                    "author": {
+                      "__typename": "Bot",
+                      "login": "capy-ai"
+                    }
+                  },
+                  {
+                    "id": "PRRC_kwDOOemAKc65PwLN",
+                    "databaseId": 3107914445,
+                    "url": "https://github.com/coolabnet/community-box/pull/39#discussion_r3107914445",
+                    "body": "Fixed in 9162a4f: Updated the plan to match implemented scoring behavior.",
+                    "createdAt": "2026-04-20T02:00:26Z",
+                    "updatedAt": "2026-04-20T02:00:27Z",
+                    "author": {
+                      "__typename": "User",
+                      "login": "luandro"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -270,6 +270,13 @@ def _paginate(
                 )
             node = node.get(part) if isinstance(node, dict) else None
 
+        if node is None or not isinstance(node, dict):
+            raise RuntimeError(
+                f"GraphQL response missing field at path {'.'.join(path_parts)}; "
+                f"check that the PR exists and you have access to "
+                f"{pr_ref.owner}/{pr_ref.repo}#{pr_ref.number}."
+            )
+
         page_info = node.get("pageInfo", {})
         items.extend(node.get("nodes") or [])
 
@@ -357,6 +364,27 @@ def keep_actor(
     return True
 
 
+def _is_suppressible_excluded_comment(
+    login: str | None,
+    pr_author: str | None,
+    author: dict[str, Any] | None = None,
+) -> bool:
+    """Return True only for comments that are safe to ignore (PR author or bot).
+
+    Unlike ``keep_actor``, which excludes unknown-author comments from
+    attention, comments with login=None are treated as NOT suppressible here —
+    so a thread whose only comments have missing author metadata is kept rather
+    than silently dropped.
+    """
+    if pr_author and login == pr_author:
+        return True
+    if login and is_bot_login(login):
+        return True
+    if is_bot_author(author):
+        return True
+    return False
+
+
 def build_unresolved_threads(
     threads: list[dict[str, Any]],
     pr_author: str | None,
@@ -371,8 +399,9 @@ def build_unresolved_threads(
         if filter_path and thread_path != filter_path:
             continue
 
+        raw_comments = (thread.get("comments") or {}).get("nodes") or []
         comments: list[dict[str, Any]] = []
-        for comment in (thread.get("comments") or {}).get("nodes") or []:
+        for comment in raw_comments:
             author_obj = comment.get("author")
             login = (author_obj or {}).get("login")
             actor_kept = keep_actor(login, pr_author, include_all, author_obj)
@@ -386,6 +415,16 @@ def build_unresolved_threads(
                 "updated_at": comment.get("updatedAt"),
                 "excluded_from_attention": not actor_kept,
             })
+
+        if not include_all and comments and all(
+            _is_suppressible_excluded_comment(
+                comment.get("author"),
+                pr_author,
+                raw_comment.get("author"),
+            )
+            for comment, raw_comment in zip(comments, raw_comments)
+        ):
+            continue
 
         results.append({
             "thread_id": thread["id"],

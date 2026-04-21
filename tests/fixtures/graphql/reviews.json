@@ -1,0 +1,60 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviews": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "REVIEW_CURSOR_LAST"
+          },
+          "nodes": [
+            {
+              "id": "PRR_kwDOOemAKc72k3kW",
+              "url": "https://github.com/coolabnet/community-box/pull/39#pullrequestreview-4136859926",
+              "state": "COMMENTED",
+              "body": "Added 3 comments",
+              "submittedAt": "2026-04-20T01:24:58Z",
+              "author": {
+                "__typename": "Bot",
+                "login": "capy-ai"
+              }
+            },
+            {
+              "id": "PRR_kwDOOemAKc72lHWg",
+              "url": "https://github.com/coolabnet/community-box/pull/39#pullrequestreview-4136924576",
+              "state": "COMMENTED",
+              "body": "",
+              "submittedAt": "2026-04-20T02:00:09Z",
+              "author": {
+                "__typename": "User",
+                "login": "luandro"
+              }
+            },
+            {
+              "id": "PRR_kwDOOemAKc72lQ5J",
+              "url": "https://github.com/coolabnet/community-box/pull/39#pullrequestreview-4136963657",
+              "state": "COMMENTED",
+              "body": "Added 3 comments",
+              "submittedAt": "2026-04-20T02:19:22Z",
+              "author": {
+                "__typename": "Bot",
+                "login": "capy-ai"
+              }
+            },
+            {
+              "id": "PRR_kwDOOemAKc72-uDj",
+              "url": "https://github.com/coolabnet/community-box/pull/39#pullrequestreview-4143636707",
+              "state": "COMMENTED",
+              "body": "Added 1 comment",
+              "submittedAt": "2026-04-20T21:27:33Z",
+              "author": {
+                "__typename": "Bot",
+                "login": "capy-ai"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

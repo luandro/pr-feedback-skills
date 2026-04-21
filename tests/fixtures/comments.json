@@ -1,0 +1,21 @@
+[
+  {
+    "url": "https://api.github.com/repos/coolabnet/community-box/issues/comments/4284332726",
+    "html_url": "https://github.com/coolabnet/community-box/pull/39#issuecomment-4284332726",
+    "issue_url": "https://api.github.com/repos/coolabnet/community-box/issues/39",
+    "id": 4284332726,
+    "node_id": "IC_kwDOOemAKc7_Xbq2",
+    "user": {
+      "login": "luandro",
+      "type": "User"
+    },
+    "created_at": "2026-04-20T21:14:14Z",
+    "updated_at": "2026-04-20T21:14:14Z",
+    "body": "Addressed all 3 review threads and verified the fixes.",
+    "author_association": "MEMBER",
+    "reactions": {
+      "total_count": 0
+    },
+    "performed_via_github_app": null
+  }
+]

@@ -102,8 +102,8 @@ Target: `fetch-pr-unresolved-feedback/scripts/fetch_unresolved_pr_feedback.py`
   - resolved threads are excluded
   - `filter_path` filters by exact path
   - comments are preserved even when excluded from attention
-  - threads with only excluded comments are still returned
-  - threads with empty comment lists are still returned
+  - threads with only excluded comments are dropped when `include_all=False`
+  - threads with empty comment lists are retained only when `include_all=True`
   - `comments: None`, `comments: {"nodes": None}`, and `comments: {"nodes": []}` are handled
   - `root_comment_id` picks the first non-`None` `databaseId`
   - field mapping is correct for `path`, `line`, `original_line`, `diff_side`, and `is_outdated`
@@ -174,7 +174,7 @@ Target: `fetch-pr-unresolved-feedback/scripts/build_actions.py`
 
 Target: fetcher GraphQL helpers
 
-- [ ] Test `_run_graphql()`
+- [x] Test `_run_graphql()`
   - expected `gh api graphql` base command includes owner, repo, number, and query via stdin
   - cursor flag included only when both cursor name and cursor value are supplied
   - GraphQL `errors` raises `RuntimeError`
@@ -187,17 +187,17 @@ Target: fetcher GraphQL helpers
   - missing path segments raise a contextual `RuntimeError`
   - empty `nodes` and missing `pageInfo` are handled safely
 
-- [ ] Test `fetch_pr_meta_and_threads()`
+- [x] Test `fetch_pr_meta_and_threads()`
   - returns `(meta_dict, threads_list)`
   - author extraction from nested metadata
   - empty `meta_capture` raises with PR context
 
-- [ ] Test wrapper helpers
+- [x] Test wrapper helpers
   - `fetch_review_threads()`
   - `fetch_reviews()`
   - `fetch_issue_comments()`
 
-- [ ] Add realistic fixture-driven parsing tests
+- [x] Add realistic fixture-driven parsing tests
   - raw thread pages into `_paginate()` then `build_unresolved_threads()`
   - raw review payload into `build_outstanding_reviews()`
   - raw issue comments payload into `build_conversation_comments()`
@@ -394,7 +394,7 @@ tests/
 
 ## Acceptance Criteria
 
-- [ ] `pytest -q` passes locally
+- [x] `pytest -q` passes locally
 - [ ] Every executable has both helper-level and `main()`-level coverage
 - [ ] Every `kind` / `decision` combination in resolver behavior is covered
 - [ ] Fetcher JSON mode and text mode are both covered
