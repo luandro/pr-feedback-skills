@@ -15,14 +15,17 @@ The suite must validate current behavior, not an imagined refactor target. Where
   - `resolve-pr-feedback/scripts/apply_pr_feedback_actions.py`
 - The repo has one shell deployment script:
   - `update-skills.sh`
-- There is no existing test harness, fixture set, or pytest config.
+- A pytest harness now exists:
+  - `pytest.ini`
+  - `tests/`
+  - real GitHub-shaped fixture files for fetch-layer parsing
 - The fetcher and resolver both wrap `gh` CLI calls through `subprocess`, but they do not share an implementation. They must be tested independently.
 - `apply_pr_feedback_actions.py` imports `resolve_pr_feedback.py` via a local `sys.path.insert`, so test imports must match that layout.
 - The fetcher has a live text-rendering path (`--format text`) via `_at()` and `_format_text()`.
 - The fetcher default is effectively “include everything except when `--exclude-bots` is passed”. The hidden `--include-all` flag exists only for backwards compatibility.
-- `build_unresolved_threads()` does not drop unresolved threads just because all comments are excluded from attention or because the thread has zero comments. It preserves the thread and annotates comments with `excluded_from_attention`.
+- `build_unresolved_threads()` now drops bot-only, PR-author-only, and empty unresolved threads when `--exclude-bots` is active, but preserves unknown-author threads and annotates comments with `excluded_from_attention`.
 - `build_actions.py` defaults generated actions to `decision="addressed"` and an empty summary. `validate_actions()` intentionally warns on addressed review-thread actions without a summary.
-- The resolver is materially less robust than the fetcher around CLI JSON handling. In particular, `resolve_pr_feedback.py` currently lacks the fetcher-style NO_COLOR environment override, ANSI stripping, and rich empty-output diagnostics in `run()` / `run_json()`. Field logs show this causing `root_comment_id_for_thread()` to fail when `gh api graphql` returns non-JSON output.
+- `resolve_pr_feedback.py` now has NO_COLOR environment overrides, ANSI stripping, richer empty-output diagnostics, safer current-branch PR fallback handling, and main-path coverage for CLI override behavior.
 - `_GRAPHQL_PR_CORE` in the fetcher is dead code. It is out of scope for test coverage and should be removed in a separate cleanup change.
 
 ## Test Design Principles
@@ -83,7 +86,7 @@ The suite must validate current behavior, not an imagined refactor target. Where
 
 Target: `fetch-pr-unresolved-feedback/scripts/fetch_unresolved_pr_feedback.py`
 
-- [ ] Test parsing and actor helpers
+- [x] Test parsing and actor helpers
   - `parse_repo_name()`
   - `parse_pr_url()`
   - `is_bot_login()`
@@ -97,7 +100,7 @@ Target: `fetch-pr-unresolved-feedback/scripts/fetch_unresolved_pr_feedback.py`
   - bare invocation with no `--url`, `--repo`, or `--pr` falling back to `gh pr view`
   - helpful error when branch PR metadata cannot be resolved
 
-- [ ] Test `build_unresolved_threads()` against actual behavior
+- [x] Test `build_unresolved_threads()` against actual behavior
   - unresolved threads are included
   - resolved threads are excluded
   - `filter_path` filters by exact path
@@ -108,7 +111,7 @@ Target: `fetch-pr-unresolved-feedback/scripts/fetch_unresolved_pr_feedback.py`
   - `root_comment_id` picks the first non-`None` `databaseId`
   - field mapping is correct for `path`, `line`, `original_line`, `diff_side`, and `is_outdated`
 
-- [ ] Test `build_outstanding_reviews()`
+- [x] Test `build_outstanding_reviews()`
   - `CHANGES_REQUESTED` and `COMMENTED` with non-empty bodies are candidates
   - empty-body `COMMENTED` reviews are excluded
   - latest-state-wins behavior for `APPROVED` and `DISMISSED`
@@ -116,7 +119,7 @@ Target: `fetch-pr-unresolved-feedback/scripts/fetch_unresolved_pr_feedback.py`
   - results preserve `excluded_from_attention` semantics
   - order follows sorted `submittedAt`
 
-- [ ] Test `build_conversation_comments()`
+- [x] Test `build_conversation_comments()`
   - regular comments included with correct field mapping
   - bot comments excluded when `include_all=False`
   - PR author comments excluded when `include_all=False`
@@ -124,14 +127,14 @@ Target: `fetch-pr-unresolved-feedback/scripts/fetch_unresolved_pr_feedback.py`
   - `html_url` preferred over `url`
   - missing `user` handled safely
 
-- [ ] Test `_apply_minimal()`
+- [x] Test `_apply_minimal()`
   - body truncation at 200 chars for threads/comments and 400 chars for reviews
   - `line` falls back to `original_line`
   - missing comments produce `author=None` and empty body
   - summary and pull request metadata pass through
   - verbose thread-only fields are dropped from minimal output
 
-- [ ] Test `_at()` and `_format_text()`
+- [x] Test `_at()` and `_format_text()`
   - `@(unknown)` fallback
   - thread, review, and conversation-comment sections render when present
   - `[OUTDATED]` and `[bot]` markers render when expected
@@ -142,7 +145,7 @@ Target: `fetch-pr-unresolved-feedback/scripts/fetch_unresolved_pr_feedback.py`
 
 Target: `fetch-pr-unresolved-feedback/scripts/build_actions.py`
 
-- [ ] Test `_pr_meta()`
+- [x] Test `_pr_meta()`
   - valid pull request metadata
   - missing owner/repo
   - missing `pull_request`
@@ -180,7 +183,7 @@ Target: fetcher GraphQL helpers
   - GraphQL `errors` raises `RuntimeError`
   - successful payload returns unchanged
 
-- [ ] Test `_paginate()`
+- [x] Test `_paginate()`
   - single-page collection
   - two-page and three-page pagination
   - `meta_capture` populated from the first page only
@@ -202,7 +205,7 @@ Target: fetcher GraphQL helpers
   - raw review payload into `build_outstanding_reviews()`
   - raw issue comments payload into `build_conversation_comments()`
 
-- [ ] Add query contract checks at the semantic level
+- [x] Add query contract checks at the semantic level
   - required connection names and requested fields are present
   - do not assert full-string equality or exact argument counts
 
@@ -210,9 +213,9 @@ Target: fetcher GraphQL helpers
 
 Target: `resolve-pr-feedback/scripts/resolve_pr_feedback.py`
 
-- [ ] Test `PullRequestRef.full_repo`
+- [x] Test `PullRequestRef.full_repo`
 
-- [ ] Test parsing and normalization helpers
+- [x] Test parsing and normalization helpers
   - `parse_repo_name()`
   - `parse_pr_url()`
   - `load_item()`
@@ -237,13 +240,13 @@ Target: `resolve-pr-feedback/scripts/resolve_pr_feedback.py`
   - real repo fallback through `gh repo view`
   - bare invocation with no `--repo` or `--pr`, relying on current-branch PR resolution via `gh pr view`
 
-- [ ] Test GitHub API helpers
+- [x] Test GitHub API helpers
   - `root_comment_id_for_thread()`
   - `create_review_reply()`
   - `resolve_review_thread()`
   - `add_reaction()`
 
-- [ ] Test `execute_action()`
+- [x] Test `execute_action()`
   - `review` kind skips cleanly
   - `review_thread` addressed with summary replies and resolves
   - `review_thread` addressed without summary resolves only
@@ -257,19 +260,19 @@ Target: `resolve-pr-feedback/scripts/resolve_pr_feedback.py`
 
 Target: `resolve-pr-feedback/scripts/apply_pr_feedback_actions.py`
 
-- [ ] Test `load_actions()`
+- [x] Test `load_actions()`
   - JSON array input
   - `{ "actions": [...] }` input
   - invalid payload shape
   - file and stdin paths
 
-- [ ] Test `resolve_pr_ref_from_action()`
+- [x] Test `resolve_pr_ref_from_action()`
   - `url`
   - `pull_request`
   - `repo` + optional `pr`
   - missing all repo sources raises
 
-- [ ] Test `format_plan()`
+- [x] Test `format_plan()`
   - review-thread addressed with summary
   - review-thread addressed without summary
   - review-thread not relevant with explicit `comment_id`
@@ -281,7 +284,7 @@ Target: `resolve-pr-feedback/scripts/apply_pr_feedback_actions.py`
   - empty-action list
   - breakdown counts
 
-- [ ] Test `main()` batch behavior
+- [x] Test `main()` batch behavior
   - `--plan` returns early and skips auth
   - auth runs once per batch otherwise
   - all-success result shape
@@ -290,13 +293,13 @@ Target: `resolve-pr-feedback/scripts/apply_pr_feedback_actions.py`
   - `--verbose` writes progress to stderr
   - dry-run mode does not hit real subprocess execution
 
-- [ ] Document the `comment_id: 0` fallback behavior explicitly
+- [x] Document the `comment_id: 0` fallback behavior explicitly
   - current code uses `action.get("comment_id") or action.get("root_comment_id")`
   - test should capture current behavior, not silently “fix” it
 
 ### Phase 7: Main-Orchestration and CLI Surface Tests
 
-- [ ] Fetcher `main()`
+- [x] Fetcher `main()`
   - JSON mode default
   - `--output`
   - `--minimal`
@@ -307,13 +310,13 @@ Target: `resolve-pr-feedback/scripts/apply_pr_feedback_actions.py`
   - hidden compatibility `--include-all`
   - summary counts and provenance in JSON mode
 
-- [ ] `build_actions.py` `main()`
+- [x] `build_actions.py` `main()`
   - stdin input
   - `--output`
   - `--validate` success and failure exit paths
   - `--drop-context`
 
-- [ ] Resolver `main()`
+- [x] Resolver `main()`
   - CLI values overriding item payload
   - `--item-json`
   - `--item-file`
@@ -325,54 +328,54 @@ Target: `resolve-pr-feedback/scripts/apply_pr_feedback_actions.py`
   - `--dry-run`
   - `--verbose`
 
-- [ ] Batch resolver `main()`
+- [x] Batch resolver `main()`
   - empty actions list
   - trailing newline in JSON output
 
 ### Phase 8: End-to-End Pipeline Tests
 
-- [ ] Fetch -> build-actions -> format-plan
-- [ ] Fetch -> build-actions -> batch-apply dry-run
-- [ ] Minimal JSON -> build-actions
+- [x] Fetch -> build-actions -> format-plan
+- [x] Fetch -> build-actions -> batch-apply dry-run
+- [x] Minimal JSON -> build-actions
   - expect generated actions to be structurally correct
   - if using default `decision="addressed"` and empty summary, expect validation warnings
   - add a second test using a supplied summary to validate a clean round-trip
-- [ ] File round-trip tests for `--output` and `--file`
-- [ ] Stdout/stderr separation across all four Python scripts
-- [ ] Exit-code behavior across success and failure paths
+- [x] File round-trip tests for `--output` and `--file`
+- [x] Stdout/stderr separation across all four Python scripts
+- [x] Exit-code behavior across success and failure paths
 
 ### Phase 9: Shell Script Tests
 
 Target: `update-skills.sh`
 
-- [ ] Establish an isolation harness for `update-skills.sh`
+- [x] Establish an isolation harness for `update-skills.sh`
   - run the script under a temporary `HOME`
   - create only the target directories needed under that temp `HOME`
   - stage source directories in a temp repo copy so `rsync --delete` cannot touch the real workstation
   - skip or xfail cleanly if `rsync` is unavailable
 
-- [ ] Test `--dry-run`
+- [x] Test `--dry-run`
   - header printed
   - rsync dry-run invoked
   - no target mutations
 
-- [ ] Test normal sync behavior in isolated temp directories
+- [x] Test normal sync behavior in isolated temp directories
   - existing target dirs
   - sync success counters
   - `__pycache__` and `*.pyc` excluded
   - `--delete` behavior present
 
-- [ ] Test missing target directory handling
+- [x] Test missing target directory handling
   - warning printed
   - script continues
   - `skipped` increments correctly under `set -e`
 
-- [ ] Test missing source directory handling
+- [x] Test missing source directory handling
   - error printed
   - script continues
   - `failed` increments correctly under `set -e`
 
-- [ ] Test final summary output
+- [x] Test final summary output
 
 ## Suggested Test File Layout
 
@@ -395,13 +398,13 @@ tests/
 ## Acceptance Criteria
 
 - [x] `pytest -q` passes locally
-- [ ] Every executable has both helper-level and `main()`-level coverage
-- [ ] Every `kind` / `decision` combination in resolver behavior is covered
-- [ ] Fetcher JSON mode and text mode are both covered
-- [ ] Dry-run paths are covered and verified not to call real GitHub endpoints
-- [ ] Shell tests are isolated and non-destructive
-- [ ] Tests describe current behavior accurately, including documented quirks
-- [ ] Query contract tests fail on real schema-shape regressions, not harmless formatting edits
+- [x] Every executable has both helper-level and `main()`-level coverage
+- [x] Every `kind` / `decision` combination in resolver behavior is covered
+- [x] Fetcher JSON mode and text mode are both covered
+- [x] Dry-run paths are covered and verified not to call real GitHub endpoints
+- [x] Shell tests are isolated and non-destructive
+- [x] Tests describe current behavior accurately, including documented quirks
+- [x] Query contract tests fail on real schema-shape regressions, not harmless formatting edits
 
 ## Out of Scope
 
