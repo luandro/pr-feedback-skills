@@ -38,6 +38,11 @@ def test_parse_pr_url_extracts_pull_request_reference() -> None:
     ) == resolver.PullRequestRef("octo", "repo", 17)
 
 
+def test_parse_pr_url_rejects_non_github_host() -> None:
+    with pytest.raises(ValueError, match="Could not parse PR URL"):
+        resolver.parse_pr_url("https://example.com/octo/repo/pull/44/files#r123")
+
+
 def test_load_item_prefers_inline_json_and_reads_from_file(tmp_path) -> None:
     item_path = tmp_path / "item.json"
     item_path.write_text(json.dumps({"kind": "issue_comment", "comment_id": 7}), encoding="utf-8")

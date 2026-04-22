@@ -404,6 +404,82 @@ def test_build_unresolved_threads_exclude_bots_keeps_human_reviewer_threads() ->
     assert [comment["excluded_from_attention"] for comment in result[0]["comments"]] == [True, True, False]
 
 
+
+def test_build_unresolved_threads_exclude_bots_keeps_threads_when_comment_page_is_truncated() -> None:
+    threads = [
+        {
+            "id": "PRRT_truncated",
+            "isResolved": False,
+            "isOutdated": False,
+            "path": "src/truncated.py",
+            "line": 40,
+            "originalLine": 40,
+            "startLine": 40,
+            "originalStartLine": None,
+            "diffSide": "RIGHT",
+            "startDiffSide": None,
+            "comments": {
+                "pageInfo": {"hasNextPage": True, "endCursor": "COMMENTS_CURSOR_1"},
+                "nodes": [
+                    {
+                        "id": "PRRC_bot",
+                        "databaseId": 301,
+                        "url": "https://github.com/example/repo/pull/1#discussion_r301",
+                        "body": "Automated suggestion.",
+                        "createdAt": "2026-04-21T00:00:00Z",
+                        "updatedAt": "2026-04-21T00:00:00Z",
+                        "author": {"__typename": "Bot", "login": "capy-ai"},
+                    },
+                    {
+                        "id": "PRRC_author",
+                        "databaseId": 302,
+                        "url": "https://github.com/example/repo/pull/1#discussion_r302",
+                        "body": "Author reply.",
+                        "createdAt": "2026-04-21T00:01:00Z",
+                        "updatedAt": "2026-04-21T00:01:00Z",
+                        "author": {"__typename": "User", "login": "luandro"},
+                    },
+                ],
+            },
+        }
+    ]
+
+    result = fetcher.build_unresolved_threads(threads, pr_author="luandro", include_all=False)
+
+    assert len(result) == 1
+    assert result[0]["thread_id"] == "PRRT_truncated"
+    assert [comment["author"] for comment in result[0]["comments"]] == ["capy-ai", "luandro"]
+    assert [comment["excluded_from_attention"] for comment in result[0]["comments"]] == [True, True]
+
+
+def test_build_unresolved_threads_exclude_bots_keeps_threads_when_truncated_page_has_no_sampled_comments() -> None:
+    threads = [
+        {
+            "id": "PRRT_truncated_empty",
+            "isResolved": False,
+            "isOutdated": False,
+            "path": "src/truncated_empty.py",
+            "line": 41,
+            "originalLine": 41,
+            "startLine": 41,
+            "originalStartLine": None,
+            "diffSide": "RIGHT",
+            "startDiffSide": None,
+            "comments": {
+                "pageInfo": {"hasNextPage": True, "endCursor": "COMMENTS_CURSOR_2"},
+                "nodes": [],
+            },
+        }
+    ]
+
+    result = fetcher.build_unresolved_threads(threads, pr_author="luandro", include_all=False)
+
+    assert len(result) == 1
+    assert result[0]["thread_id"] == "PRRT_truncated_empty"
+    assert result[0]["comments"] == []
+
+
+
 def test_build_unresolved_threads_filter_path_and_empty_comment_shapes_follow_include_all() -> None:
     threads = [
         {

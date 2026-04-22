@@ -138,6 +138,28 @@ def test_resolve_pr_ref_uses_current_branch_pr_when_repo_and_pr_missing(
     assert ref == resolver.PullRequestRef(owner="acme", repo="widgets", number=179)
 
 
+def test_resolve_pr_ref_uses_current_branch_pr_from_github_enterprise_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = Namespace(url=None, repo=None, pr=None)
+
+    def fake_run_json(cmd, stdin=None, dry_run=False):
+        assert cmd == ["gh", "pr", "view", "--json", "number,url"]
+        assert stdin is None
+        assert dry_run is False
+        return {
+            "number": 179,
+            "url": "https://github.example.com/acme/widgets/pull/179",
+        }
+
+    monkeypatch.setattr(resolver, "run_json", fake_run_json)
+    monkeypatch.setattr(resolver, "run", lambda *a, **k: pytest.fail("run() should not be called"))
+
+    ref = resolver.resolve_pr_ref(args, {}, dry_run=False)
+
+    assert ref == resolver.PullRequestRef(owner="acme", repo="widgets", number=179)
+
+
 def test_resolve_pr_ref_dry_run_without_repo_or_pr_returns_placeholder_pr() -> None:
     args = Namespace(url=None, repo=None, pr=None)
 

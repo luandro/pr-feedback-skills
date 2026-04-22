@@ -185,13 +185,38 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
         )
         if dry_run:
             return PullRequestRef(owner="OWNER", repo="REPO", number=1)
-        pr_url = pr_payload.get("url") if isinstance(pr_payload, dict) else None
+        if not isinstance(pr_payload, dict):
+            raise RuntimeError(
+                "Could not determine the PR for the current branch. "
+                "Pass --repo + --pr or --url explicitly."
+            )
+        pr_number = pr_payload.get("number")
+        pr_url = pr_payload.get("url")
+        if not isinstance(pr_number, int):
+            try:
+                pr_number = int(pr_number)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Could not determine the PR number for the current branch. "
+                    "Pass --repo + --pr or --url explicitly."
+                ) from exc
         if not isinstance(pr_url, str) or not pr_url:
             raise RuntimeError(
                 "Could not determine the PR for the current branch. "
                 "Pass --repo + --pr or --url explicitly."
             )
-        return parse_pr_url(pr_url)
+
+        pr_host_match = re.search(r"https://[^/]+/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/\d+", pr_url)
+        if not pr_host_match:
+            raise RuntimeError(
+                "Could not determine the PR repository for the current branch. "
+                "Pass --repo + --pr or --url explicitly."
+            )
+        return PullRequestRef(
+            owner=pr_host_match.group("owner"),
+            repo=pr_host_match.group("repo"),
+            number=pr_number,
+        )
 
     repo_name = run(
         ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],

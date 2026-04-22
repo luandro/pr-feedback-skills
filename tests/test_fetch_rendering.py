@@ -332,6 +332,7 @@ def test_graphql_queries_keep_required_connection_and_field_contracts() -> None:
         "reviewThreads(first: 100",
         "pageInfo { hasNextPage endCursor }",
         "comments(first: 100)",
+        "comments(first: 100) {\n            pageInfo { hasNextPage endCursor }",
         "databaseId",
         "diffSide",
         "author { __typename login }",

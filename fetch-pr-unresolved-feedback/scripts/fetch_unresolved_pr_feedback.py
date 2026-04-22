@@ -48,6 +48,7 @@ query(
           path line originalLine startLine originalStartLine
           diffSide startDiffSide
           comments(first: 100) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               id databaseId url body createdAt updatedAt
               author { __typename login }
@@ -397,6 +398,25 @@ def _is_suppressible_excluded_comment(
     return False
 
 
+def _is_safely_suppressible_thread_comments(
+    raw_comments: list[dict[str, Any]],
+    pr_author: str | None,
+    comments_truncated: bool,
+) -> bool:
+    if comments_truncated:
+        return False
+    if not raw_comments:
+        return True
+    return all(
+        _is_suppressible_excluded_comment(
+            (raw_comment.get("author") or {}).get("login"),
+            pr_author,
+            raw_comment.get("author"),
+        )
+        for raw_comment in raw_comments
+    )
+
+
 def build_unresolved_threads(
     threads: list[dict[str, Any]],
     pr_author: str | None,
@@ -411,7 +431,9 @@ def build_unresolved_threads(
         if filter_path and thread_path != filter_path:
             continue
 
-        raw_comments = (thread.get("comments") or {}).get("nodes") or []
+        comments_connection = thread.get("comments") or {}
+        raw_comments = comments_connection.get("nodes") or []
+        comments_truncated = bool((comments_connection.get("pageInfo") or {}).get("hasNextPage"))
         comments: list[dict[str, Any]] = []
         for comment in raw_comments:
             author_obj = comment.get("author")
@@ -428,16 +450,10 @@ def build_unresolved_threads(
                 "excluded_from_attention": not actor_kept,
             })
 
-        if not include_all and not comments:
-            continue
-
-        if not include_all and comments and all(
-            _is_suppressible_excluded_comment(
-                comment.get("author"),
-                pr_author,
-                raw_comment.get("author"),
-            )
-            for comment, raw_comment in zip(comments, raw_comments)
+        if not include_all and _is_safely_suppressible_thread_comments(
+            raw_comments,
+            pr_author,
+            comments_truncated,
         ):
             continue
 
