@@ -28,14 +28,23 @@ def _stage_repo_copy(tmp_path: Path) -> Path:
 
 def _run_update_skills(repo_dir: Path, home_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "HOME": str(home_dir)}
-    return subprocess.run(
-        ["bash", str(repo_dir / "update-skills.sh"), *args],
-        cwd=repo_dir,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            ["bash", str(repo_dir / "update-skills.sh"), *args],
+            cwd=repo_dir,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args=["bash", str(repo_dir / "update-skills.sh"), *args],
+            returncode=-1,
+            stdout="",
+            stderr="subprocess timed out after 30 s",
+        )
 
 
 def test_update_skills_dry_run_prints_header_and_does_not_mutate_targets(tmp_path: Path) -> None:

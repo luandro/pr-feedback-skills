@@ -147,14 +147,32 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
     pr_meta = raw_pr_meta if isinstance(raw_pr_meta, dict) else {}
 
     repo_value = args.repo
-    if repo_value is None and pr_meta.get("owner") and pr_meta.get("repo"):
-        repo_value = f"{pr_meta['owner']}/{pr_meta['repo']}"
+    pr_meta_owner = pr_meta.get("owner")
+    pr_meta_repo = pr_meta.get("repo")
+    if (
+        repo_value is None
+        and isinstance(pr_meta_owner, str)
+        and pr_meta_owner
+        and isinstance(pr_meta_repo, str)
+        and pr_meta_repo
+    ):
+        repo_value = f"{pr_meta_owner}/{pr_meta_repo}"
     if repo_value is None:
-        repo_value = item.get("repo")
+        candidate_repo = item.get("repo")
+        if isinstance(candidate_repo, str):
+            repo_value = candidate_repo
 
     pr_value = args.pr if args.pr is not None else pr_meta.get("number")
     if pr_value is None:
         pr_value = item.get("pr")
+
+    if pr_value is not None and not isinstance(pr_value, int):
+        try:
+            pr_value = int(pr_value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"PR number must be an integer, got {pr_value!r}"
+            ) from exc
 
     if repo_value:
         owner, repo = parse_repo_name(repo_value)
@@ -214,10 +232,31 @@ def root_comment_id_for_thread(thread_id: str, dry_run: bool) -> int | None:
             "The thread may be stale, already resolved, or from another repository."
         )
 
-    comments = (node.get("comments") or {}).get("nodes") or []
-    for comment in comments:
-        if comment.get("databaseId") is not None:
-            return int(comment["databaseId"])
+    comments_connection = node.get("comments")
+    if not isinstance(comments_connection, dict):
+        raise RuntimeError(
+            f"Malformed response for thread '{thread_id}': "
+            "'comments' is not a dict."
+        )
+
+    nodes = comments_connection.get("nodes")
+    if nodes is None:
+        return None
+    if not isinstance(nodes, list):
+        raise RuntimeError(
+            f"Malformed response for thread '{thread_id}': "
+            "'nodes' is not a list."
+        )
+
+    for comment in nodes:
+        if not isinstance(comment, dict):
+            continue
+        db_id = comment.get("databaseId")
+        if db_id is not None:
+            try:
+                return int(db_id)
+            except (TypeError, ValueError):
+                continue
     return None
 
 
