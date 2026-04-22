@@ -231,10 +231,11 @@ def test_batch_main_continues_after_failures_and_exit_code_reports_failure(
     assert "[batch 2/2] kind=review_comment decision=not_relevant" in captured.err
 
 
-def test_batch_main_treats_comment_id_zero_as_missing_and_falls_back_to_root_comment_id(
+def test_batch_main_preserves_comment_id_zero_instead_of_treating_it_as_missing(
     monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
+    """comment_id=0 is a valid integer and must not be treated as missing."""
     args = Namespace(file=None, dry_run=False, plan=False, verbose=False, exit_code=False)
     comment_ids: list[int | None] = []
 
@@ -252,6 +253,42 @@ def test_batch_main_treats_comment_id_zero_as_missing_and_falls_back_to_root_com
                 "kind": "review_thread",
                 "thread_id": "PRRT_1",
                 "comment_id": 0,
+                "root_comment_id": 55,
+                "decision": "not_relevant",
+            }
+        ],
+    )
+    monkeypatch.setattr(batch, "ensure_gh_auth", lambda dry_run: None)
+    monkeypatch.setattr(batch, "execute_action", fake_execute_action)
+
+    batch.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert comment_ids == [0]
+    assert payload["results"][0]["result"]["comment_id"] == 0
+
+
+def test_batch_main_falls_back_to_root_comment_id_when_comment_id_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    """When comment_id is absent, root_comment_id should be used instead."""
+    args = Namespace(file=None, dry_run=False, plan=False, verbose=False, exit_code=False)
+    comment_ids: list[int | None] = []
+
+    def fake_execute_action(**kwargs):
+        comment_ids.append(kwargs["comment_id"])
+        return {"comment_id": kwargs["comment_id"]}
+
+    monkeypatch.setattr(batch.argparse.ArgumentParser, "parse_args", lambda self: args)
+    monkeypatch.setattr(
+        batch,
+        "load_actions",
+        lambda file_path: [
+            {
+                "repo": "octo/repo",
+                "kind": "review_thread",
+                "thread_id": "PRRT_1",
                 "root_comment_id": 55,
                 "decision": "not_relevant",
             }

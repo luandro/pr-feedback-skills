@@ -419,7 +419,11 @@ def main() -> None:
     ensure_gh_auth(args.dry_run)
 
     thread_id = args.thread_id or item.get("thread_id")
-    comment_id = args.comment_id or item.get("comment_id") or item.get("root_comment_id")
+    comment_id = args.comment_id
+    if comment_id is None:
+        comment_id = item.get("comment_id")
+    if comment_id is None:
+        comment_id = item.get("root_comment_id")
     summary = args.summary or item.get("summary") or ""
 
     if args.verbose:

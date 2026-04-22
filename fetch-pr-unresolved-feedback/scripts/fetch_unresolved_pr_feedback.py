@@ -117,14 +117,22 @@ class PullRequestRef:
 # ANSI escape sequence pattern (covers color codes, cursor movement, etc.)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
+COMMAND_TIMEOUT_SECONDS = 120
 
-def run(cmd: list[str], stdin: str | None = None) -> str:
+
+def run(cmd: list[str], stdin: str | None = None, timeout: int = COMMAND_TIMEOUT_SECONDS) -> str:
     # Disable color output from gh and other CLI tools so JSON parsing works.
     env = {**os.environ, "NO_COLOR": "1", "GH_CONFIG_PREFS_NO_COLOR": "true"}
-    proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env)
-    if proc.returncode != 0:
+    try:
+        proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr.strip()}"
+            f"Command timed out after {timeout}s: {' '.join(cmd)}"
+        ) from exc
+    if proc.returncode != 0:
+        stderr = _ANSI_RE.sub("", proc.stderr.strip())
+        raise RuntimeError(
+            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{stderr}"
         )
     # Strip any ANSI escape codes that leaked through (belt-and-suspenders)
     return _ANSI_RE.sub("", proc.stdout)
