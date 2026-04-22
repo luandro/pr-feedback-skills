@@ -257,12 +257,10 @@ def _paginate(
         payload = _run_graphql(query, pr_ref, cursor_name if cursor else None, cursor)
 
         if first_pass and meta_capture is not None:
-            pr_node = (
-                payload.get("data", {})
-                .get("repository", {})
-                .get("pullRequest")
-            )
-            if pr_node:
+            data = payload.get("data") if isinstance(payload, dict) else None
+            repo_node = data.get("repository") if isinstance(data, dict) else None
+            pr_node = repo_node.get("pullRequest") if isinstance(repo_node, dict) else None
+            if isinstance(pr_node, dict):
                 for key in ("number", "url", "title", "state", "author"):
                     if key in pr_node:
                         meta_capture[key] = pr_node[key]
@@ -439,7 +437,7 @@ def build_unresolved_threads(
                 pr_author,
                 raw_comment.get("author"),
             )
-            for comment, raw_comment in zip(comments, raw_comments, strict=True)
+            for comment, raw_comment in zip(comments, raw_comments)
         ):
             continue
 
