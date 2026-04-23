@@ -180,3 +180,79 @@ def test_root_comment_id_for_thread_wraps_json_failure(monkeypatch: pytest.Monke
     message = str(excinfo.value)
     assert "Failed to load review thread 'T123'" in message
     assert "--comment-id" in message
+
+
+@pytest.mark.parametrize("payload", [{"data": None}, {"data": {"node": None}}])
+def test_root_comment_id_for_thread_rejects_missing_thread_node(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+) -> None:
+    monkeypatch.setattr(resolver, "run_json", lambda *args, **kwargs: payload)
+
+    with pytest.raises(RuntimeError, match=r"did not return a PullRequestReviewThread"):
+        resolver.root_comment_id_for_thread("T123", dry_run=False)
+
+
+def test_root_comment_id_for_thread_rejects_malformed_comments_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        resolver,
+        "run_json",
+        lambda *args, **kwargs: {
+            "data": {
+                "node": {
+                    "__typename": "PullRequestReviewThread",
+                    "comments": [],
+                }
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match=r"'comments' is not a dict"):
+        resolver.root_comment_id_for_thread("T123", dry_run=False)
+
+
+def test_root_comment_id_for_thread_rejects_non_list_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        resolver,
+        "run_json",
+        lambda *args, **kwargs: {
+            "data": {
+                "node": {
+                    "__typename": "PullRequestReviewThread",
+                    "comments": {"nodes": "bad"},
+                }
+            }
+        },
+    )
+
+    with pytest.raises(RuntimeError, match=r"'nodes' is not a list"):
+        resolver.root_comment_id_for_thread("T123", dry_run=False)
+
+
+def test_root_comment_id_for_thread_skips_malformed_comment_entries_and_invalid_database_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        resolver,
+        "run_json",
+        lambda *args, **kwargs: {
+            "data": {
+                "node": {
+                    "__typename": "PullRequestReviewThread",
+                    "comments": {
+                        "nodes": [
+                            "bad",
+                            {"databaseId": "not-an-int"},
+                            {"databaseId": "456"},
+                        ]
+                    },
+                }
+            }
+        },
+    )
+
+    assert resolver.root_comment_id_for_thread("T123", dry_run=False) == 456

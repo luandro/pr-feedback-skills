@@ -195,6 +195,26 @@ def test_paginate_raises_clean_runtime_error_when_connection_field_is_missing(
         )
 
 
+@pytest.mark.parametrize("payload", [{}, {"data": None}])
+def test_paginate_raises_clean_runtime_error_when_top_level_data_is_missing_or_null(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+) -> None:
+    monkeypatch.setattr(fetcher, "_run_graphql", lambda *args, **kwargs: payload)
+
+    meta_capture: dict[str, object] = {}
+    with pytest.raises(RuntimeError, match=r"repository\.pullRequest\.reviewThreads"):
+        fetcher._paginate(
+            fetcher.GRAPHQL_QUERY_THREADS,
+            _pr_ref(),
+            "threadsCursor",
+            ["repository", "pullRequest", "reviewThreads"],
+            meta_capture=meta_capture,
+        )
+
+    assert meta_capture == {}
+
+
 def test_fetch_pr_meta_and_threads_flattens_author_login_and_raises_when_meta_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
