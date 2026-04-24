@@ -48,6 +48,7 @@ query(
           path line originalLine startLine originalStartLine
           diffSide startDiffSide
           comments(first: 100) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               id databaseId url body createdAt updatedAt
               author { __typename login }
@@ -96,6 +97,24 @@ query(
 }
 """
 
+GRAPHQL_QUERY_THREAD_COMMENTS = """\
+query(
+  $owner: String!, $repo: String!, $threadId: ID!, $commentsCursor: String
+) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $commentsCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id databaseId url body createdAt updatedAt
+          author { __typename login }
+        }
+      }
+    }
+  }
+}
+"""
+
 # ---------------------------------------------------------------------------
 # Constants & helpers
 # ---------------------------------------------------------------------------
@@ -117,14 +136,22 @@ class PullRequestRef:
 # ANSI escape sequence pattern (covers color codes, cursor movement, etc.)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
+COMMAND_TIMEOUT_SECONDS = 120
 
-def run(cmd: list[str], stdin: str | None = None) -> str:
+
+def run(cmd: list[str], stdin: str | None = None, timeout: int = COMMAND_TIMEOUT_SECONDS) -> str:
     # Disable color output from gh and other CLI tools so JSON parsing works.
     env = {**os.environ, "NO_COLOR": "1", "GH_CONFIG_PREFS_NO_COLOR": "true"}
-    proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env)
-    if proc.returncode != 0:
+    try:
+        proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr.strip()}"
+            f"Command timed out after {timeout}s: {' '.join(cmd)}"
+        ) from exc
+    if proc.returncode != 0:
+        stderr = _ANSI_RE.sub("", proc.stderr.strip())
+        raise RuntimeError(
+            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{stderr}"
         )
     # Strip any ANSI escape codes that leaked through (belt-and-suspenders)
     return _ANSI_RE.sub("", proc.stdout)
@@ -249,18 +276,16 @@ def _paginate(
         payload = _run_graphql(query, pr_ref, cursor_name if cursor else None, cursor)
 
         if first_pass and meta_capture is not None:
-            pr_node = (
-                payload.get("data", {})
-                .get("repository", {})
-                .get("pullRequest")
-            )
-            if pr_node:
+            data = payload.get("data") if isinstance(payload, dict) else None
+            repo_node = data.get("repository") if isinstance(data, dict) else None
+            pr_node = repo_node.get("pullRequest") if isinstance(repo_node, dict) else None
+            if isinstance(pr_node, dict):
                 for key in ("number", "url", "title", "state", "author"):
                     if key in pr_node:
                         meta_capture[key] = pr_node[key]
             first_pass = False
 
-        node = payload["data"]
+        node = payload.get("data") if isinstance(payload, dict) else None
         for part in path_parts:
             if node is None:
                 raise RuntimeError(
@@ -270,7 +295,20 @@ def _paginate(
                 )
             node = node.get(part) if isinstance(node, dict) else None
 
-        page_info = node.get("pageInfo", {})
+        if node is None or not isinstance(node, dict):
+            raise RuntimeError(
+                f"GraphQL response missing field at path {'.'.join(path_parts)}; "
+                f"check that the PR exists and you have access to "
+                f"{pr_ref.owner}/{pr_ref.repo}#{pr_ref.number}."
+            )
+
+        page_info = node.get("pageInfo")
+        if not isinstance(page_info, dict):
+            raise RuntimeError(
+                f"GraphQL response missing field at path {'.'.join(path_parts)}.pageInfo; "
+                f"check that the PR exists and you have access to "
+                f"{pr_ref.owner}/{pr_ref.repo}#{pr_ref.number}."
+            )
         items.extend(node.get("nodes") or [])
 
         if page_info.get("hasNextPage"):
@@ -278,6 +316,64 @@ def _paginate(
         else:
             break
     return items
+
+
+def _paginate_thread_comments(
+    pr_ref: PullRequestRef,
+    thread_id: str,
+    first_page_comments: list[dict[str, Any]],
+    first_page_info: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Paginate through remaining comments in a single review thread.
+
+    Called when the first page of comments (fetched as part of the threads
+    query) indicates ``hasNextPage``.  Each subsequent page is fetched via
+    the ``node(id: $threadId)`` GraphQL query so we only pay for the
+    comments we still need.
+    """
+    all_comments = list(first_page_comments)
+    cursor: str | None = first_page_info.get("endCursor")
+
+    while cursor:
+        cmd = [
+            "gh", "api", "graphql", "-F", "query=@-",
+            "-F", f"owner={pr_ref.owner}",
+            "-F", f"repo={pr_ref.repo}",
+            "-F", f"threadId={thread_id}",
+            "-F", f"commentsCursor={cursor}",
+        ]
+        payload = run_json(cmd, stdin=GRAPHQL_QUERY_THREAD_COMMENTS)
+        if isinstance(payload, dict) and payload.get("errors"):
+            raise RuntimeError(json.dumps(payload["errors"], indent=2))
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        thread_node = data.get("node") if isinstance(data, dict) else None
+        if thread_node is None or not isinstance(thread_node, dict):
+            raise RuntimeError(
+                f"GraphQL response missing node for thread {thread_id}; "
+                f"check that the thread exists and you have access."
+            )
+
+        comments_conn = thread_node.get("comments")
+        if comments_conn is None or not isinstance(comments_conn, dict):
+            raise RuntimeError(
+                f"GraphQL response missing comments connection for thread {thread_id}."
+            )
+
+        page_info = comments_conn.get("pageInfo")
+        if not isinstance(page_info, dict):
+            raise RuntimeError(
+                f"GraphQL response missing comments pageInfo for thread {thread_id}."
+            )
+
+        all_comments.extend(comments_conn.get("nodes") or [])
+
+        if page_info.get("hasNextPage"):
+            cursor = page_info["endCursor"]
+        else:
+            cursor = None
+
+    return all_comments
 
 
 def fetch_pr_meta_and_threads(
@@ -301,6 +397,27 @@ def fetch_pr_meta_and_threads(
             f"GraphQL returned no pullRequest node for {pr_ref.owner}/{pr_ref.repo}#{pr_ref.number}. "
             f"Check the PR exists and you have access."
         )
+
+    # Deep-paginate any thread whose comments were truncated beyond the
+    # first 100 fetched as part of the threads query.
+    for thread in threads:
+        comments_conn = thread.get("comments")
+        if not isinstance(comments_conn, dict):
+            continue
+        page_info = comments_conn.get("pageInfo")
+        if isinstance(page_info, dict) and page_info.get("hasNextPage"):
+            existing_nodes = comments_conn.get("nodes") or []
+            all_comments = _paginate_thread_comments(
+                pr_ref,
+                thread["id"],
+                existing_nodes,
+                page_info,
+            )
+            thread["comments"] = {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": all_comments,
+            }
+
     author = (meta_capture.get("author") or {}).get("login")
     return {
         "number": meta_capture.get("number"),
@@ -357,6 +474,46 @@ def keep_actor(
     return True
 
 
+def _is_suppressible_excluded_comment(
+    login: str | None,
+    pr_author: str | None,
+    author: dict[str, Any] | None = None,
+) -> bool:
+    """Return True only for comments that are safe to ignore (PR author or bot).
+
+    Unlike ``keep_actor``, which excludes unknown-author comments from
+    attention, comments with login=None are treated as NOT suppressible here —
+    so a thread whose only comments have missing author metadata is kept rather
+    than silently dropped.
+    """
+    if pr_author and login == pr_author:
+        return True
+    if login and is_bot_login(login):
+        return True
+    if is_bot_author(author):
+        return True
+    return False
+
+
+def _is_safely_suppressible_thread_comments(
+    raw_comments: list[dict[str, Any]],
+    pr_author: str | None,
+    comments_truncated: bool,
+) -> bool:
+    if comments_truncated:
+        return False
+    if not raw_comments:
+        return True
+    return all(
+        _is_suppressible_excluded_comment(
+            (raw_comment.get("author") or {}).get("login"),
+            pr_author,
+            raw_comment.get("author"),
+        )
+        for raw_comment in raw_comments
+    )
+
+
 def build_unresolved_threads(
     threads: list[dict[str, Any]],
     pr_author: str | None,
@@ -371,8 +528,11 @@ def build_unresolved_threads(
         if filter_path and thread_path != filter_path:
             continue
 
+        comments_connection = thread.get("comments") or {}
+        raw_comments = comments_connection.get("nodes") or []
+        comments_truncated = bool((comments_connection.get("pageInfo") or {}).get("hasNextPage"))
         comments: list[dict[str, Any]] = []
-        for comment in (thread.get("comments") or {}).get("nodes") or []:
+        for comment in raw_comments:
             author_obj = comment.get("author")
             login = (author_obj or {}).get("login")
             actor_kept = keep_actor(login, pr_author, include_all, author_obj)
@@ -386,6 +546,13 @@ def build_unresolved_threads(
                 "updated_at": comment.get("updatedAt"),
                 "excluded_from_attention": not actor_kept,
             })
+
+        if not include_all and _is_safely_suppressible_thread_comments(
+            raw_comments,
+            pr_author,
+            comments_truncated,
+        ):
+            continue
 
         results.append({
             "thread_id": thread["id"],
@@ -479,16 +646,21 @@ def _apply_minimal(result: dict[str, Any]) -> dict[str, Any]:
 
     Keeps everything the resolver + human triage need:
       - PR meta, summary counts
-      - thread_id, root_comment_id, path, line for threads
-      - author + first-line-ish body excerpt (up to 200 chars) per thread
+      - thread_id, root_comment_id, path, line, is_outdated for threads
+      - author + first-line-ish body excerpt (configurable via PR_FEEDBACK_EXCERPT_LEN, default 200 chars) per thread
       - id + author + body excerpt per conversation comment
       - id + author + state + body excerpt per outstanding review
     Drops:
       - per-comment ids/urls/timestamps within threads
-      - is_outdated/diff_side/start_* thread fields
+      - diff_side/start_* thread fields
       - provenance
     """
-    def excerpt(body: str | None, n: int = 200) -> str:
+    _env_n = os.environ.get("PR_FEEDBACK_EXCERPT_LEN", "")
+    _default_n = int(_env_n) if _env_n.isdigit() and int(_env_n) > 0 else 200
+
+    def excerpt(body: str | None, n: int = 0) -> str:
+        if n <= 0:
+            n = _default_n
         if not body:
             return ""
         body = body.strip()
@@ -503,6 +675,7 @@ def _apply_minimal(result: dict[str, Any]) -> dict[str, Any]:
                 "root_comment_id": t.get("root_comment_id"),
                 "path": t.get("path"),
                 "line": t.get("line") or t.get("original_line"),
+                "is_outdated": t.get("is_outdated", False),
                 "author": next(
                     (c.get("author") for c in t.get("comments") or [] if c.get("author")),
                     None,

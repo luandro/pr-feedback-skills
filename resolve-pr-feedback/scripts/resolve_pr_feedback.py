@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -52,6 +53,9 @@ mutation($threadId: ID!) {
 }
 """
 
+# ANSI escape sequence pattern (covers color codes, cursor movement, etc.)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
 
 @dataclass
 class PullRequestRef:
@@ -64,25 +68,44 @@ class PullRequestRef:
         return f"{self.owner}/{self.repo}"
 
 
-def run(cmd: list[str], stdin: str | None = None, dry_run: bool = False) -> str:
+COMMAND_TIMEOUT_SECONDS = 60
+
+
+def run(cmd: list[str], stdin: str | None = None, dry_run: bool = False, timeout: int = COMMAND_TIMEOUT_SECONDS) -> str:
     if dry_run:
         return json.dumps({"dry_run": True, "command": cmd})
-    proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True)
-    if proc.returncode != 0:
+    env = {**os.environ, "NO_COLOR": "1", "GH_CONFIG_PREFS_NO_COLOR": "true"}
+    try:
+        proc = subprocess.run(cmd, input=stdin, text=True, capture_output=True, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr.strip()}"
+            f"Command timed out after {timeout}s: {' '.join(cmd)}"
+        ) from exc
+    if proc.returncode != 0:
+        stderr = _ANSI_RE.sub("", proc.stderr.strip())
+        raise RuntimeError(
+            f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{stderr}"
         )
-    return proc.stdout
+    return _ANSI_RE.sub("", proc.stdout)
 
 
 def run_json(cmd: list[str], stdin: str | None = None, dry_run: bool = False) -> Any:
     out = run(cmd, stdin=stdin, dry_run=dry_run)
     if dry_run:
         return {"dry_run": True, "command": cmd, "stdin": stdin}
+    if not out or not out.strip():
+        raise RuntimeError(
+            f"Empty output from {' '.join(cmd)}; expected JSON. "
+            f"This usually means `gh` returned nothing or a wrapper altered the output."
+        )
     try:
         return json.loads(out)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Failed to parse JSON from {' '.join(cmd)}") from exc
+        preview = out[:200].replace("\n", " ")
+        raise RuntimeError(
+            f"Failed to parse JSON from {' '.join(cmd)}\n"
+            f"First 200 chars of output: {preview!r}"
+        ) from exc
 
 
 def ensure_gh_auth(dry_run: bool) -> None:
@@ -120,20 +143,80 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
     if args.url:
         return parse_pr_url(args.url)
 
-    if item.get("pull_request"):
-        pr_meta = item["pull_request"]
-        return PullRequestRef(
-            owner=pr_meta["owner"],
-            repo=pr_meta["repo"],
-            number=pr_meta.get("number"),
-        )
+    raw_pr_meta = item.get("pull_request")
+    pr_meta = raw_pr_meta if isinstance(raw_pr_meta, dict) else {}
 
-    repo_value = args.repo or item.get("repo")
-    pr_value = args.pr if args.pr is not None else item.get("pr")
+    repo_value = args.repo
+    pr_meta_owner = pr_meta.get("owner")
+    pr_meta_repo = pr_meta.get("repo")
+    if (
+        repo_value is None
+        and isinstance(pr_meta_owner, str)
+        and pr_meta_owner
+        and isinstance(pr_meta_repo, str)
+        and pr_meta_repo
+    ):
+        repo_value = f"{pr_meta_owner}/{pr_meta_repo}"
+    if repo_value is None:
+        candidate_repo = item.get("repo")
+        if isinstance(candidate_repo, str):
+            repo_value = candidate_repo
+
+    pr_value = args.pr if args.pr is not None else pr_meta.get("number")
+    if pr_value is None:
+        pr_value = item.get("pr")
+
+    if pr_value is not None and not isinstance(pr_value, int):
+        try:
+            pr_value = int(pr_value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"PR number must be an integer, got {pr_value!r}"
+            ) from exc
 
     if repo_value:
         owner, repo = parse_repo_name(repo_value)
         return PullRequestRef(owner=owner, repo=repo, number=pr_value)
+
+    if pr_value is None:
+        pr_payload = run_json(
+            ["gh", "pr", "view", "--json", "number,url"],
+            dry_run=dry_run,
+        )
+        if dry_run:
+            return PullRequestRef(owner="OWNER", repo="REPO", number=1)
+        if not isinstance(pr_payload, dict):
+            raise RuntimeError(
+                "Could not determine the PR for the current branch. "
+                "Pass --repo + --pr or --url explicitly."
+            )
+        pr_number = pr_payload.get("number")
+        pr_url = pr_payload.get("url")
+        if not isinstance(pr_number, int):
+            try:
+                pr_number = int(pr_number)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Could not determine the PR number for the current branch. "
+                    "Pass --repo + --pr or --url explicitly."
+                ) from exc
+        if not isinstance(pr_url, str) or not pr_url:
+            raise RuntimeError(
+                "Could not determine the PR for the current branch. "
+                "Pass --repo + --pr or --url explicitly."
+            )
+
+        pr_host_match = re.search(r"https://[^/]+/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/\d+", pr_url)
+        if not pr_host_match:
+            raise RuntimeError(
+                "Could not determine the PR repository for the current branch. "
+                "Pass --repo + --pr or --url explicitly."
+            )
+        return PullRequestRef(
+            owner=pr_host_match.group("owner"),
+            repo=pr_host_match.group("repo"),
+            number=pr_number,
+        )
 
     repo_name = run(
         ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
@@ -150,22 +233,55 @@ def resolve_pr_ref(args: argparse.Namespace, item: dict[str, Any], dry_run: bool
 # ---------------------------------------------------------------------------
 
 def root_comment_id_for_thread(thread_id: str, dry_run: bool) -> int | None:
-    payload = run_json(
-        ["gh", "api", "graphql", "-F", "query=@-", "-F", f"threadId={thread_id}"],
-        stdin=GET_THREAD_QUERY,
-        dry_run=dry_run,
-    )
+    try:
+        payload = run_json(
+            ["gh", "api", "graphql", "-F", "query=@-", "-F", f"threadId={thread_id}"],
+            stdin=GET_THREAD_QUERY,
+            dry_run=dry_run,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Failed to load review thread '{thread_id}' to determine its root comment id. "
+            "Check that the thread id is current, belongs to the target repository, and that "
+            "`gh api graphql` is returning JSON (not an auth or formatting error). "
+            "If you already have a root comment id, pass `--comment-id` to skip this lookup."
+        ) from exc
     if dry_run:
         return None
 
-    node = payload.get("data", {}).get("node")
-    if not node or node.get("__typename") != "PullRequestReviewThread":
-        raise RuntimeError(f"Could not load review thread '{thread_id}'")
+    data = payload.get("data") if isinstance(payload, dict) else None
+    node = data.get("node") if isinstance(data, dict) else None
+    if not isinstance(node, dict) or node.get("__typename") != "PullRequestReviewThread":
+        raise RuntimeError(
+            f"GitHub did not return a PullRequestReviewThread for '{thread_id}'. "
+            "The thread may be stale, already resolved, or from another repository."
+        )
 
-    comments = (node.get("comments") or {}).get("nodes") or []
-    for comment in comments:
-        if comment.get("databaseId") is not None:
-            return int(comment["databaseId"])
+    comments_connection = node.get("comments")
+    if not isinstance(comments_connection, dict):
+        raise RuntimeError(
+            f"Malformed response for thread '{thread_id}': "
+            "'comments' is not a dict."
+        )
+
+    nodes = comments_connection.get("nodes")
+    if nodes is None:
+        return None
+    if not isinstance(nodes, list):
+        raise RuntimeError(
+            f"Malformed response for thread '{thread_id}': "
+            "'nodes' is not a list."
+        )
+
+    for comment in nodes:
+        if not isinstance(comment, dict):
+            continue
+        db_id = comment.get("databaseId")
+        if db_id is not None:
+            try:
+                return int(db_id)
+            except (TypeError, ValueError):
+                continue
     return None
 
 
@@ -292,7 +408,9 @@ def execute_action(
                     dry_run=dry_run,
                 )
             resolve_payload = resolve_review_thread(thread_id, dry_run)
-            result["action_taken"] = "replied_and_resolved" if summary else "resolved"
+            result["action_taken"] = (
+                "replied_and_resolved" if reply_payload is not None else "resolved"
+            )
             result["details"] = {
                 "reply": reply_payload,
                 "resolve_thread": resolve_payload,
@@ -365,7 +483,11 @@ def main() -> None:
     ensure_gh_auth(args.dry_run)
 
     thread_id = args.thread_id or item.get("thread_id")
-    comment_id = args.comment_id or item.get("comment_id") or item.get("root_comment_id")
+    comment_id = args.comment_id
+    if comment_id is None:
+        comment_id = item.get("comment_id")
+    if comment_id is None:
+        comment_id = item.get("root_comment_id")
     summary = args.summary or item.get("summary") or ""
 
     if args.verbose:

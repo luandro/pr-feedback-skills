@@ -1,0 +1,52 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 39,
+        "url": "https://github.com/coolabnet/community-box/pull/39",
+        "title": "fix: Phase 1 critical bug fixes and safety nets",
+        "state": "OPEN",
+        "author": {
+          "__typename": "User",
+          "login": "luandro"
+        },
+        "reviewThreads": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "CURSOR_2"
+          },
+          "nodes": [
+            {
+              "id": "PRRT_kwDOOemAKc58VP6A",
+              "isResolved": false,
+              "isOutdated": false,
+              "path": "app/src/App.tsx",
+              "line": 11,
+              "originalLine": 11,
+              "startLine": 11,
+              "originalStartLine": null,
+              "diffSide": "RIGHT",
+              "startDiffSide": null,
+              "comments": {
+                "nodes": [
+                  {
+                    "id": "PRRC_kwDOOemAKc65mGVq",
+                    "databaseId": 3113772394,
+                    "url": "https://github.com/coolabnet/community-box/pull/39#discussion_r3113772394",
+                    "body": "**[Medium] [Bug]** Route-level React.lazy failures stay cached across ErrorBoundary reset.",
+                    "createdAt": "2026-04-20T21:27:33Z",
+                    "updatedAt": "2026-04-20T21:27:33Z",
+                    "author": {
+                      "__typename": "Bot",
+                      "login": "capy-ai"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

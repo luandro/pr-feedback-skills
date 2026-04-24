@@ -23,6 +23,10 @@ Thumbs.db
 *.swp
 *.swo
 
+# Internal tooling (not published)
+.codex
+.claude/
+
 # Virtual environments
 .venv/
 venv/

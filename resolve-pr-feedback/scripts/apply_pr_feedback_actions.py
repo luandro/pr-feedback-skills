@@ -159,7 +159,9 @@ def main() -> None:
             pr_ref = resolve_pr_ref_from_action(action, args.dry_run)
 
             thread_id = action.get("thread_id")
-            comment_id = action.get("comment_id") or action.get("root_comment_id")
+            comment_id = action.get("comment_id")
+            if comment_id is None:
+                comment_id = action.get("root_comment_id")
             summary = action.get("summary") or ""
 
             if args.verbose:
