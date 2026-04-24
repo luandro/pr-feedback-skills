@@ -4,6 +4,13 @@
 
 set -euo pipefail
 
+# Ensure rsync is available.
+if ! command -v rsync &>/dev/null; then
+    echo "[ERROR] rsync is not installed. Install it with your package manager" >&2
+    echo "        (e.g. apt install rsync, brew install rsync, etc.) and re-run." >&2
+    exit 1
+fi
+
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILLS=("fetch-pr-unresolved-feedback" "resolve-pr-feedback")
 
