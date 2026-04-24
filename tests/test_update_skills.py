@@ -149,3 +149,65 @@ def test_update_skills_reports_missing_targets_and_missing_sources_without_exiti
     assert "[WARN] Target directory does not exist:" in result.stdout
     assert "[ERROR] Source skill not found:" in result.stdout
     assert "Updated: 1  Failed: 1  Skipped: 2" in result.stdout
+
+
+def test_update_skills_uses_pr_feedback_targets_env_var(tmp_path: Path) -> None:
+    _require_rsync()
+    repo_dir = _stage_repo_copy(tmp_path)
+    home_dir = tmp_path / "home"
+
+    # Create a custom target directory
+    custom_target = home_dir / "custom" / "skills"
+    custom_target.mkdir(parents=True)
+
+    env = {
+        **os.environ,
+        "HOME": str(home_dir),
+        "PR_FEEDBACK_TARGETS": str(custom_target),
+    }
+    result = subprocess.run(
+        ["bash", str(repo_dir / "update-skills.sh")],
+        cwd=repo_dir,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    assert "Updated: 2  Failed: 0  Skipped: 0" in result.stdout
+    # Verify files were actually synced
+    assert (custom_target / "fetch-pr-unresolved-feedback" / "SKILL.md").exists()
+    assert (custom_target / "resolve-pr-feedback" / "SKILL.md").exists()
+
+
+def test_update_skills_uses_multiple_colon_separated_targets(tmp_path: Path) -> None:
+    _require_rsync()
+    repo_dir = _stage_repo_copy(tmp_path)
+    home_dir = tmp_path / "home"
+
+    target_a = home_dir / "agent_a" / "skills"
+    target_b = home_dir / "agent_b" / "skills"
+    target_a.mkdir(parents=True)
+    target_b.mkdir(parents=True)
+
+    env = {
+        **os.environ,
+        "HOME": str(home_dir),
+        "PR_FEEDBACK_TARGETS": f"{target_a}:{target_b}",
+    }
+    result = subprocess.run(
+        ["bash", str(repo_dir / "update-skills.sh")],
+        cwd=repo_dir,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    assert "Updated: 4  Failed: 0  Skipped: 0" in result.stdout
+    assert (target_a / "fetch-pr-unresolved-feedback" / "SKILL.md").exists()
+    assert (target_b / "resolve-pr-feedback" / "SKILL.md").exists()

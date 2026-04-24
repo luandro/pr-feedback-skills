@@ -864,3 +864,164 @@ def test_fetch_main_exclude_bots_removes_bot_only_threads_from_summary_counts(
     assert result["unresolved_review_threads"] == []
     assert result["outstanding_reviews"] == []
     assert result["conversation_comments"] == []
+
+
+def test_paginate_thread_comments_fetches_remaining_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_paginate_thread_comments should fetch additional comment pages beyond the first 100."""
+    pr_ref = _pr_ref()
+    first_page = [
+        {"id": "C1", "databaseId": 1, "body": "first comment"},
+        {"id": "C2", "databaseId": 2, "body": "second comment"},
+    ]
+    first_page_info = {"hasNextPage": True, "endCursor": "COMMENTS_PAGE2"}
+
+    extra_pages = [
+        {
+            "data": {
+                "node": {
+                    "comments": {
+                        "pageInfo": {"hasNextPage": True, "endCursor": "COMMENTS_PAGE3"},
+                        "nodes": [
+                            {"id": "C101", "databaseId": 101, "body": "page 2 comment"},
+                        ],
+                    }
+                }
+            }
+        },
+        {
+            "data": {
+                "node": {
+                    "comments": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": [
+                            {"id": "C201", "databaseId": 201, "body": "page 3 comment"},
+                        ],
+                    }
+                }
+            }
+        },
+    ]
+    call_idx = 0
+
+    def fake_run_json(cmd, stdin=None):
+        nonlocal call_idx
+        page = extra_pages[call_idx]
+        call_idx += 1
+        return page
+
+    monkeypatch.setattr(fetcher, "run_json", fake_run_json)
+
+    all_comments = fetcher._paginate_thread_comments(
+        pr_ref, "PRRT_thread1", first_page, first_page_info,
+    )
+
+    assert [c["id"] for c in all_comments] == ["C1", "C2", "C101", "C201"]
+
+
+def test_paginate_thread_comments_returns_first_page_when_no_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When first page has no truncation, no extra requests are made."""
+    pr_ref = _pr_ref()
+    first_page = [{"id": "C1", "databaseId": 1, "body": "only comment"}]
+    first_page_info = {"hasNextPage": False, "endCursor": None}
+
+    monkeypatch.setattr(fetcher, "run_json", lambda *a, **kw: pytest.fail("should not be called"))
+
+    all_comments = fetcher._paginate_thread_comments(
+        pr_ref, "PRRT_thread1", first_page, first_page_info,
+    )
+
+    assert all_comments == first_page
+
+
+def test_fetch_pr_meta_and_threads_deep_paginates_truncated_thread_comments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Threads with truncated comments should be fully paginated before returning."""
+    pr_ref = _pr_ref()
+    threads = [
+        {
+            "id": "PRRT_deep",
+            "isResolved": False,
+            "isOutdated": False,
+            "path": "src/deep.py",
+            "line": 1,
+            "originalLine": 1,
+            "startLine": None,
+            "originalStartLine": None,
+            "diffSide": "RIGHT",
+            "startDiffSide": None,
+            "comments": {
+                "pageInfo": {"hasNextPage": True, "endCursor": "DEEP_PAGE2"},
+                "nodes": [{"id": f"C{i}", "databaseId": i, "body": f"comment {i}"} for i in range(1, 3)],
+            },
+        },
+        {
+            "id": "PRRT_shallow",
+            "isResolved": False,
+            "isOutdated": False,
+            "path": "src/shallow.py",
+            "line": 2,
+            "originalLine": 2,
+            "startLine": None,
+            "originalStartLine": None,
+            "diffSide": "RIGHT",
+            "startDiffSide": None,
+            "comments": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [{"id": "CS1", "databaseId": 901, "body": "shallow comment"}],
+            },
+        },
+    ]
+
+    # Fake _paginate to return threads and capture meta
+    def fake_paginate(*args, **kwargs):
+        meta_capture = kwargs.get("meta_capture")
+        if meta_capture is not None:
+            meta_capture.update({
+                "number": 39,
+                "url": "https://github.com/coolabnet/community-box/pull/39",
+                "title": "test",
+                "state": "OPEN",
+                "author": {"__typename": "User", "login": "luandro"},
+            })
+        return threads
+
+    # Fake _paginate_thread_comments to return extra comments
+    def fake_paginate_thread_comments(pr_ref_arg, thread_id, first_page_comments, first_page_info):
+        return first_page_comments + [
+            {"id": "C100", "databaseId": 100, "body": "extra comment"},
+        ]
+
+    monkeypatch.setattr(fetcher, "_paginate", fake_paginate)
+    monkeypatch.setattr(fetcher, "_paginate_thread_comments", fake_paginate_thread_comments)
+
+    meta, result_threads = fetcher.fetch_pr_meta_and_threads(pr_ref)
+
+    # Deep thread should have all comments merged and pageInfo reset
+    deep_thread = result_threads[0]
+    assert deep_thread["comments"]["pageInfo"] == {"hasNextPage": False, "endCursor": None}
+    assert [c["id"] for c in deep_thread["comments"]["nodes"]] == ["C1", "C2", "C100"]
+
+    # Shallow thread should be untouched
+    shallow_thread = result_threads[1]
+    assert shallow_thread["comments"]["pageInfo"] == {"hasNextPage": False, "endCursor": None}
+    assert [c["id"] for c in shallow_thread["comments"]["nodes"]] == ["CS1"]
+
+
+def test_paginate_handles_non_dict_payload_gracefully(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_paginate should raise a clear RuntimeError when payload is not a dict."""
+    monkeypatch.setattr(fetcher, "_run_graphql", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match=r"repository\.pullRequest\.reviewThreads"):
+        fetcher._paginate(
+            fetcher.GRAPHQL_QUERY_THREADS,
+            _pr_ref(),
+            "threadsCursor",
+            ["repository", "pullRequest", "reviewThreads"],
+        )

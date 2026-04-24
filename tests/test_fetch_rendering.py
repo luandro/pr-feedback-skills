@@ -153,6 +153,7 @@ def test_apply_minimal_preserves_metadata_and_drops_verbose_thread_fields() -> N
         "root_comment_id": 12,
         "path": "src/app.py",
         "line": 44,
+        "is_outdated": True,
         "author": "reviewer",
         "body": ("x" * 199) + "\u2026",
     }
@@ -161,6 +162,7 @@ def test_apply_minimal_preserves_metadata_and_drops_verbose_thread_fields() -> N
         "root_comment_id": None,
         "path": None,
         "line": None,
+        "is_outdated": False,
         "author": None,
         "body": "",
     }
@@ -352,3 +354,49 @@ def test_graphql_queries_keep_required_connection_and_field_contracts() -> None:
         "author { __typename login }",
     ]:
         assert token in fetcher.GRAPHQL_QUERY_COMMENTS
+
+
+def test_apply_minimal_respects_pr_feedback_excerpt_len_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PR_FEEDBACK_EXCERPT_LEN", "50")
+    result = {
+        "pull_request": {},
+        "summary": {},
+        "unresolved_review_threads": [
+            {
+                "thread_id": "T1",
+                "root_comment_id": 1,
+                "path": "a.py",
+                "line": 1,
+                "is_outdated": False,
+                "comments": [{"author": "rev", "body": "B" * 80}],
+            }
+        ],
+        "outstanding_reviews": [],
+        "conversation_comments": [],
+    }
+    minimal = fetcher._apply_minimal(result)
+    # Body should be truncated at 49 + ellipsis = 50 chars
+    assert minimal["unresolved_review_threads"][0]["body"] == ("B" * 49) + "\u2026"
+
+
+def test_apply_minimal_uses_default_200_when_env_is_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PR_FEEDBACK_EXCERPT_LEN", "not_a_number")
+    result = {
+        "pull_request": {},
+        "summary": {},
+        "unresolved_review_threads": [
+            {
+                "thread_id": "T1",
+                "root_comment_id": 1,
+                "path": "a.py",
+                "line": 1,
+                "is_outdated": False,
+                "comments": [{"author": "rev", "body": "A" * 205}],
+            }
+        ],
+        "outstanding_reviews": [],
+        "conversation_comments": [],
+    }
+    minimal = fetcher._apply_minimal(result)
+    # Should fall back to default 200
+    assert minimal["unresolved_review_threads"][0]["body"] == ("A" * 199) + "\u2026"

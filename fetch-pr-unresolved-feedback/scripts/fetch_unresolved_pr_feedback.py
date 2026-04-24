@@ -97,6 +97,24 @@ query(
 }
 """
 
+GRAPHQL_QUERY_THREAD_COMMENTS = """\
+query(
+  $owner: String!, $repo: String!, $threadId: ID!, $commentsCursor: String
+) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $commentsCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id databaseId url body createdAt updatedAt
+          author { __typename login }
+        }
+      }
+    }
+  }
+}
+"""
+
 # ---------------------------------------------------------------------------
 # Constants & helpers
 # ---------------------------------------------------------------------------
@@ -267,7 +285,7 @@ def _paginate(
                         meta_capture[key] = pr_node[key]
             first_pass = False
 
-        node = payload.get("data")
+        node = payload.get("data") if isinstance(payload, dict) else None
         for part in path_parts:
             if node is None:
                 raise RuntimeError(
@@ -300,6 +318,64 @@ def _paginate(
     return items
 
 
+def _paginate_thread_comments(
+    pr_ref: PullRequestRef,
+    thread_id: str,
+    first_page_comments: list[dict[str, Any]],
+    first_page_info: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Paginate through remaining comments in a single review thread.
+
+    Called when the first page of comments (fetched as part of the threads
+    query) indicates ``hasNextPage``.  Each subsequent page is fetched via
+    the ``node(id: $threadId)`` GraphQL query so we only pay for the
+    comments we still need.
+    """
+    all_comments = list(first_page_comments)
+    cursor: str | None = first_page_info.get("endCursor")
+
+    while cursor:
+        cmd = [
+            "gh", "api", "graphql", "-F", "query=@-",
+            "-F", f"owner={pr_ref.owner}",
+            "-F", f"repo={pr_ref.repo}",
+            "-F", f"threadId={thread_id}",
+            "-F", f"commentsCursor={cursor}",
+        ]
+        payload = run_json(cmd, stdin=GRAPHQL_QUERY_THREAD_COMMENTS)
+        if isinstance(payload, dict) and payload.get("errors"):
+            raise RuntimeError(json.dumps(payload["errors"], indent=2))
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        thread_node = data.get("node") if isinstance(data, dict) else None
+        if thread_node is None or not isinstance(thread_node, dict):
+            raise RuntimeError(
+                f"GraphQL response missing node for thread {thread_id}; "
+                f"check that the thread exists and you have access."
+            )
+
+        comments_conn = thread_node.get("comments")
+        if comments_conn is None or not isinstance(comments_conn, dict):
+            raise RuntimeError(
+                f"GraphQL response missing comments connection for thread {thread_id}."
+            )
+
+        page_info = comments_conn.get("pageInfo")
+        if not isinstance(page_info, dict):
+            raise RuntimeError(
+                f"GraphQL response missing comments pageInfo for thread {thread_id}."
+            )
+
+        all_comments.extend(comments_conn.get("nodes") or [])
+
+        if page_info.get("hasNextPage"):
+            cursor = page_info["endCursor"]
+        else:
+            cursor = None
+
+    return all_comments
+
+
 def fetch_pr_meta_and_threads(
     pr_ref: PullRequestRef,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -321,6 +397,27 @@ def fetch_pr_meta_and_threads(
             f"GraphQL returned no pullRequest node for {pr_ref.owner}/{pr_ref.repo}#{pr_ref.number}. "
             f"Check the PR exists and you have access."
         )
+
+    # Deep-paginate any thread whose comments were truncated beyond the
+    # first 100 fetched as part of the threads query.
+    for thread in threads:
+        comments_conn = thread.get("comments")
+        if not isinstance(comments_conn, dict):
+            continue
+        page_info = comments_conn.get("pageInfo")
+        if isinstance(page_info, dict) and page_info.get("hasNextPage"):
+            existing_nodes = comments_conn.get("nodes") or []
+            all_comments = _paginate_thread_comments(
+                pr_ref,
+                thread["id"],
+                existing_nodes,
+                page_info,
+            )
+            thread["comments"] = {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": all_comments,
+            }
+
     author = (meta_capture.get("author") or {}).get("login")
     return {
         "number": meta_capture.get("number"),
@@ -549,16 +646,21 @@ def _apply_minimal(result: dict[str, Any]) -> dict[str, Any]:
 
     Keeps everything the resolver + human triage need:
       - PR meta, summary counts
-      - thread_id, root_comment_id, path, line for threads
-      - author + first-line-ish body excerpt (up to 200 chars) per thread
+      - thread_id, root_comment_id, path, line, is_outdated for threads
+      - author + first-line-ish body excerpt (configurable via PR_FEEDBACK_EXCERPT_LEN, default 200 chars) per thread
       - id + author + body excerpt per conversation comment
       - id + author + state + body excerpt per outstanding review
     Drops:
       - per-comment ids/urls/timestamps within threads
-      - is_outdated/diff_side/start_* thread fields
+      - diff_side/start_* thread fields
       - provenance
     """
-    def excerpt(body: str | None, n: int = 200) -> str:
+    _env_n = os.environ.get("PR_FEEDBACK_EXCERPT_LEN", "")
+    _default_n = int(_env_n) if _env_n.isdigit() and int(_env_n) > 0 else 200
+
+    def excerpt(body: str | None, n: int = 0) -> str:
+        if n <= 0:
+            n = _default_n
         if not body:
             return ""
         body = body.strip()
@@ -573,6 +675,7 @@ def _apply_minimal(result: dict[str, Any]) -> dict[str, Any]:
                 "root_comment_id": t.get("root_comment_id"),
                 "path": t.get("path"),
                 "line": t.get("line") or t.get("original_line"),
+                "is_outdated": t.get("is_outdated", False),
                 "author": next(
                     (c.get("author") for c in t.get("comments") or [] if c.get("author")),
                     None,

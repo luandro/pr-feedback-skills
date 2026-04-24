@@ -6,11 +6,19 @@ set -euo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILLS=("fetch-pr-unresolved-feedback" "resolve-pr-feedback")
-TARGETS=(
+
+# Configurable target directories via environment variables.
+# Override with: PR_FEEDBACK_TARGETS="/path/a:/path/b" ./update-skills.sh
+_default_targets=(
     "$HOME/.claude/skills"
     "$HOME/.codex/skills"
     "$HOME/forge/skills"
 )
+if [[ -n "${PR_FEEDBACK_TARGETS:-}" ]]; then
+    IFS=: read -ra TARGETS <<< "$PR_FEEDBACK_TARGETS"
+else
+    TARGETS=("${_default_targets[@]}")
+fi
 
 DRY_RUN=false
 
